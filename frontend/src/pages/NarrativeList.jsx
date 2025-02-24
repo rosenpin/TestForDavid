@@ -1,0 +1,100 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import axios from 'axios';
+
+const NarrativeList = () => {
+  const [narratives, setNarratives] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchNarratives = async () => {
+      try {
+        setLoading(true);
+        const response = await axios.get('/api/narratives');
+        setNarratives(response.data.narratives || []);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error fetching narratives:', err);
+        setError('Failed to load narratives. Please try again later.');
+        setLoading(false);
+      }
+    };
+
+    fetchNarratives();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+        <strong className="font-bold">Error!</strong>
+        <span className="block sm:inline"> {error}</span>
+      </div>
+    );
+  }
+
+  if (narratives.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <h1 className="text-3xl font-bold text-gray-800 mb-6">Your Narratives</h1>
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-6 py-8 rounded-lg max-w-2xl mx-auto">
+          <h2 className="text-xl font-semibold mb-3">No narratives found</h2>
+          <p className="text-gray-600 mb-6">
+            You haven't processed any photos yet. Process your photos to discover the narratives in your collection.
+          </p>
+          <Link to="/process" className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-md transition duration-300">
+            Process Photos
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="py-8">
+      <h1 className="text-3xl font-bold text-gray-800 mb-8 text-center">Your Life Narratives</h1>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        {narratives.map((narrative) => (
+          <Link 
+            key={narrative.id} 
+            to={`/narratives/${narrative.id}`}
+            className="narrative-card bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-all duration-300"
+          >
+            {narrative.selected_photo_ids && narrative.selected_photo_ids.length > 0 && (
+              <div className="h-48 overflow-hidden">
+                <img 
+                  src={`/api/photos/${narrative.selected_photo_ids[0]}`} 
+                  alt={narrative.title}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            )}
+            <div className="p-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-2">{narrative.title}</h2>
+              <p className="text-gray-600 line-clamp-3">
+                {narrative.description}
+              </p>
+              <div className="mt-4 flex justify-between items-center">
+                <span className="text-sm text-gray-500">
+                  {narrative.photo_ids ? narrative.photo_ids.length : 0} photos
+                </span>
+                <span className="text-blue-600 font-medium">View narrative →</span>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default NarrativeList; 

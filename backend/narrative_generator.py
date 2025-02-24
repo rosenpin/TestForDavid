@@ -1,0 +1,238 @@
+import os
+import json
+import asyncio
+from typing import Dict, List, Any, Optional
+import uuid
+import openai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure OpenAI API
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+class NarrativeGenerator:
+    def __init__(self, data_dir: str = "data"):
+        self.data_dir = data_dir
+        self.metadata_dir = os.path.join(data_dir, "metadata")
+        self.photos_metadata_dir = os.path.join(self.metadata_dir, "photos")
+        
+        # Create necessary directories
+        os.makedirs(self.metadata_dir, exist_ok=True)
+        os.makedirs(self.photos_metadata_dir, exist_ok=True)
+    
+    async def generate_narratives(self, status_callback=None) -> List[Dict[str, Any]]:
+        """Generate narratives from photo descriptions."""
+        try:
+            # Update status
+            if status_callback:
+                status_callback(current_stage="generating_narratives")
+            
+            # Load all photo metadata
+            photo_metadata = []
+            for filename in os.listdir(self.photos_metadata_dir):
+                if filename.endswith(".json"):
+                    with open(os.path.join(self.photos_metadata_dir, filename), "r") as f:
+                        metadata = json.load(f)
+                        photo_metadata.append(metadata)
+            
+            # If we don't have enough photos, return empty narratives
+            if len(photo_metadata) < 5:
+                return []
+            
+            # Prepare descriptions for the LLM
+            descriptions = [
+                {
+                    "id": photo["id"],
+                    "description": photo["description"],
+                    "timestamp": photo["timestamp"]
+                }
+                for photo in photo_metadata
+            ]
+            
+            # Sort by timestamp
+            descriptions.sort(key=lambda x: x["timestamp"])
+            
+            # Generate narratives using OpenAI
+            narratives = await self._generate_narratives_with_llm(descriptions)
+            
+            # Save narratives
+            narratives_path = os.path.join(self.metadata_dir, "narratives.json")
+            with open(narratives_path, "w") as f:
+                json.dump(narratives, f, indent=2)
+            
+            # Update photo metadata with narrative assignments
+            for narrative in narratives:
+                for photo_id in narrative["photo_ids"]:
+                    photo_path = os.path.join(self.photos_metadata_dir, f"{photo_id}.json")
+                    if os.path.exists(photo_path):
+                        with open(photo_path, "r") as f:
+                            photo_data = json.load(f)
+                        
+                        if "narratives" not in photo_data:
+                            photo_data["narratives"] = []
+                        
+                        # Add narrative ID if not already present
+                        if narrative["id"] not in photo_data["narratives"]:
+                            photo_data["narratives"].append(narrative["id"])
+                        
+                        with open(photo_path, "w") as f:
+                            json.dump(photo_data, f, indent=2)
+            
+            # Update status
+            if status_callback:
+                status_callback(current_stage="complete")
+            
+            return narratives
+        
+        except Exception as e:
+            print(f"Error generating narratives: {str(e)}")
+            if status_callback:
+                status_callback(error=str(e))
+            raise
+    
+    async def _generate_narratives_with_llm(self, descriptions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use OpenAI to generate narratives from photo descriptions."""
+        try:
+            # Prepare the prompt
+            descriptions_text = "\n".join([
+                f"Photo {i+1} (ID: {desc['id']}): {desc['description']}"
+                for i, desc in enumerate(descriptions)
+            ])
+            
+            # Call OpenAI API
+            response = await openai.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are an expert at analyzing photo collections and identifying meaningful life narratives.
+                        Your task is to analyze photo descriptions and group them into coherent narratives or stories.
+                        For each narrative, provide:
+                        1. A title (short and engaging)
+                        2. A description (1-2 paragraphs explaining the narrative)
+                        3. A list of photo IDs that belong to this narrative
+                        4. A selection of the most representative photos (a subset of the photos in the narrative)
+                        
+                        Create between 3-7 distinct narratives, depending on the diversity of the photos.
+                        Each narrative should tell a meaningful story about the person's life, experiences, or interests.
+                        A photo can belong to multiple narratives if relevant."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Here are descriptions of photos from someone's life. Analyze these descriptions and identify meaningful narratives or stories:
+
+{descriptions_text}
+
+Format your response as a JSON array of narrative objects with the following structure:
+[
+  {{
+    "id": "unique-id-1",
+    "title": "Narrative Title",
+    "description": "Detailed description of the narrative",
+    "photo_ids": ["photo-id-1", "photo-id-2", ...],
+    "selected_photo_ids": ["photo-id-1", "photo-id-3", ...] // A subset of the most representative photos
+  }},
+  ...
+]
+"""
+                    }
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=4000
+            )
+            
+            # Parse the response
+            content = response.choices[0].message.content.strip()
+            narratives_data = json.loads(content)
+            
+            # Ensure we have the expected format
+            if "narratives" in narratives_data:
+                narratives = narratives_data["narratives"]
+            else:
+                narratives = narratives_data
+            
+            # Ensure each narrative has a unique ID
+            for narrative in narratives:
+                if "id" not in narrative or not narrative["id"]:
+                    narrative["id"] = str(uuid.uuid4())
+            
+            return narratives
+        
+        except Exception as e:
+            print(f"Error generating narratives with LLM: {str(e)}")
+            # Return a simple fallback narrative if there's an error
+            return [{
+                "id": str(uuid.uuid4()),
+                "title": "Photo Collection",
+                "description": "A collection of photos from various moments in life.",
+                "photo_ids": [desc["id"] for desc in descriptions],
+                "selected_photo_ids": [desc["id"] for desc in descriptions[:min(10, len(descriptions))]]
+            }]
+    
+    async def select_representative_photos(self, narrative: Dict[str, Any], photo_metadata: List[Dict[str, Any]]) -> List[str]:
+        """Select the most representative photos for a narrative."""
+        # Filter photos that belong to this narrative
+        narrative_photos = [photo for photo in photo_metadata if photo["id"] in narrative["photo_ids"]]
+        
+        # If we have 10 or fewer photos, use all of them
+        if len(narrative_photos) <= 10:
+            return [photo["id"] for photo in narrative_photos]
+        
+        # Otherwise, use OpenAI to select the most representative ones
+        try:
+            # Prepare the prompt
+            photos_text = "\n".join([
+                f"Photo {i+1} (ID: {photo['id']}): {photo['description']}"
+                for i, photo in enumerate(narrative_photos)
+            ])
+            
+            # Call OpenAI API
+            response = await openai.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are an expert curator who selects the most representative and engaging photos for a narrative.
+                        Your task is to select a subset of photos that best tell the story of a narrative.
+                        Choose photos that are diverse, visually interesting, and capture key moments or elements of the narrative.
+                        Avoid selecting very similar photos or ones that don't add new information to the narrative."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Here is a narrative titled "{narrative['title']}" with the following description:
+{narrative['description']}
+
+And here are all the photos that belong to this narrative:
+{photos_text}
+
+Select the 5-10 most representative photos that best tell this narrative. Format your response as a JSON array of photo IDs:
+["photo-id-1", "photo-id-2", ...]
+"""
+                    }
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=1000
+            )
+            
+            # Parse the response
+            content = response.choices[0].message.content.strip()
+            selected_photos_data = json.loads(content)
+            
+            # Ensure we have the expected format
+            if "selected_photo_ids" in selected_photos_data:
+                selected_photos = selected_photos_data["selected_photo_ids"]
+            else:
+                selected_photos = selected_photos_data
+            
+            # Validate that all selected photos are in the narrative
+            valid_selected_photos = [photo_id for photo_id in selected_photos if photo_id in narrative["photo_ids"]]
+            
+            return valid_selected_photos
+        
+        except Exception as e:
+            print(f"Error selecting representative photos: {str(e)}")
+            # Fallback: select a random subset
+            import random
+            return random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"]))) 
