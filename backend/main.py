@@ -11,7 +11,7 @@ from pathlib import Path
 import asyncio
 import random
 
-from photo_processor import PhotoProcessor
+from processors import PhotoProcessor
 from narrative_generator import NarrativeGenerator
 
 # Constants for directory paths
@@ -22,6 +22,7 @@ METADATA_DIR = os.path.join(DATA_DIR, "metadata")
 PHOTOS_METADATA_DIR = os.path.join(METADATA_DIR, "photos")
 TEMP_UPLOADS_DIR = os.path.join(DATA_DIR, "temp_uploads")
 NARRATIVES_FILE = os.path.join(METADATA_DIR, "narratives.json")
+FACES_DIR = os.path.join(DATA_DIR, "faces")
 
 app = FastAPI(title="Life Narrative Explorer")
 
@@ -40,9 +41,11 @@ os.makedirs(PHOTOS_DIR, exist_ok=True)
 os.makedirs(METADATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_METADATA_DIR, exist_ok=True)
 os.makedirs(TEMP_UPLOADS_DIR, exist_ok=True)
+os.makedirs(FACES_DIR, exist_ok=True)
 
 # Mount static files directory for serving photos
 app.mount("/api/photo-files", StaticFiles(directory=PHOTOS_DIR), name="photos")
+app.mount("/api/face-files", StaticFiles(directory=FACES_DIR), name="faces")
 
 # Global variables to track processing state
 processing_status = {
@@ -260,6 +263,60 @@ async def generate_narratives_only():
         processing_status["is_processing"] = False
         processing_status["error"] = str(e)
         print(f"Error in background narrative generation: {str(e)}")
+
+@app.get("/api/persons")
+async def get_persons():
+    """Get a list of all persons detected in photos."""
+    try:
+        person_stats_path = os.path.join(METADATA_DIR, "person_stats.json")
+        if os.path.exists(person_stats_path):
+            with open(person_stats_path, "r") as f:
+                person_stats = json.load(f)
+            return person_stats
+        else:
+            return {}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving person data: {str(e)}")
+
+@app.get("/api/persons/{person_id}")
+async def get_person(person_id: str):
+    """Get details for a specific person, including all photos they appear in."""
+    try:
+        person_stats_path = os.path.join(METADATA_DIR, "person_stats.json")
+        if not os.path.exists(person_stats_path):
+            raise HTTPException(status_code=404, detail="No person data available")
+        
+        with open(person_stats_path, "r") as f:
+            person_stats = json.load(f)
+        
+        if person_id not in person_stats:
+            raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+        
+        person_data = person_stats[person_id]
+        
+        # Get photo metadata for all photos this person appears in
+        photo_metadata = []
+        for photo_id in person_data.get("photos", []):
+            photo_path = os.path.join(PHOTOS_METADATA_DIR, f"{photo_id}.json")
+            if os.path.exists(photo_path):
+                with open(photo_path, "r") as f:
+                    photo_data = json.load(f)
+                
+                # Filter to only include this person's face data
+                if "faces" in photo_data:
+                    photo_data["faces"] = [face for face in photo_data["faces"] 
+                                          if face.get("person_id") == person_id]
+                
+                photo_metadata.append(photo_data)
+        
+        # Add photo metadata to the response
+        person_data["photo_metadata"] = photo_metadata
+        
+        return person_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving person data: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -49,7 +49,8 @@ class NarrativeGenerator:
                     "timestamp": photo["timestamp"],
                     "location": photo.get("location", None),
                     "date_taken": datetime.datetime.fromtimestamp(photo["timestamp"]).strftime("%Y-%m-%d %H:%M:%S") if photo.get("timestamp") else None,
-                    "location_name": self._format_location(photo.get("location", None))
+                    "location_name": self._format_location(photo.get("location", None)),
+                    "people": photo.get("people", [])
                 }
                 for photo in photo_metadata
             ]
@@ -137,14 +138,26 @@ class NarrativeGenerator:
     async def _generate_narratives_with_llm(self, descriptions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use OpenAI to generate narratives from photo descriptions."""
         try:
+            # Get people information
+            people_data = self._collect_people_data(descriptions)
+            
             # Prepare the prompt
             descriptions_text = "\n".join([
                 f"Photo {i+1} (ID: {desc['id']}): {desc['description']}" + 
                 (f" | Location: {desc['location_name']}" if desc.get('location_name') else 
                  (f" | Coordinates: {desc['location']['latitude']}, {desc['location']['longitude']}" if desc.get('location') else "")) +
-                (f" | Date Taken: {desc['date_taken']}" if desc.get('date_taken') else "")
+                (f" | Date Taken: {desc['date_taken']}" if desc.get('date_taken') else "") +
+                (f" | People: {', '.join(desc.get('people', []))}" if desc.get('people') else "")
                 for i, desc in enumerate(descriptions)
             ])
+            
+            # Add people information to the prompt
+            people_text = ""
+            if people_data:
+                people_text = "\n\nPeople identified in photos:\n" + "\n".join([
+                    f"Person {person_id}: Appears in {stats['photo_count']} photos"
+                    for person_id, stats in people_data.items()
+                ])
             
             # Call OpenAI API using the client
             response = await client.chat.completions.create(
@@ -164,10 +177,11 @@ class NarrativeGenerator:
                         - "photo_ids": An array of string photo IDs that belong to this narrative
                         - "selected_photo_ids": An array of string photo IDs that are most representative (a subset of photo_ids)
                         
-                        Pay special attention to location data and timestamps when available. Use this information to:
-                        - Group photos by location (e.g., "Trip to Paris", "Hiking in the Mountains")
-                        - Identify chronological sequences of events
-                        - Detect patterns in time (seasonal activities, annual events, etc.)
+                        Pay special attention to:
+                        1. Location data and timestamps when available
+                        2. People identified in photos (person_X IDs represent the same individual across photos)
+                        
+                        Consider creating people-focused narratives for individuals who appear frequently.
                         
                         Create between 3-7 distinct narratives, depending on the diversity of the photos.
                         Each narrative should tell a meaningful story about the person's life, experiences, or interests.
@@ -191,14 +205,14 @@ class NarrativeGenerator:
                         "role": "user",
                         "content": f"""Here are descriptions of photos from someone's life. Analyze these descriptions and identify meaningful narratives or stories:
 
-{descriptions_text}
+{descriptions_text}{people_text}
 
 IMPORTANT: Your response MUST be a valid JSON object with the exact structure specified in the system instructions.
 """
                     }
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=40000
+                max_tokens=16383
             )
             
             # Parse the response
@@ -331,4 +345,31 @@ IMPORTANT: Your response MUST be a valid JSON object with the exact structure sp
             print(f"Error selecting representative photos: {str(e)}")
             # Fallback: select a random subset
             import random
-            return random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"]))) 
+            return random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"])))
+    
+    def _collect_people_data(self, descriptions: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+        """Collect statistics about people appearing in photos."""
+        people_stats = {}
+        
+        # Gather all photos by person
+        for desc in descriptions:
+            if "people" in desc and desc["people"]:
+                for person_id in desc["people"]:
+                    if person_id not in people_stats:
+                        people_stats[person_id] = {"photo_count": 0, "photos": []}
+                    
+                    people_stats[person_id]["photo_count"] += 1
+                    people_stats[person_id]["photos"].append(desc["id"])
+        
+        # Filter out people who appear in fewer than 3 photos
+        filtered_stats = {
+            person_id: stats 
+            for person_id, stats in people_stats.items() 
+            if stats["photo_count"] >= 3
+        }
+        
+        # Remove the photos list from the output to keep it clean
+        for person_id in filtered_stats:
+            del filtered_stats[person_id]["photos"]
+        
+        return filtered_stats 

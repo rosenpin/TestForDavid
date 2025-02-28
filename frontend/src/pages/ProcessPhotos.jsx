@@ -227,6 +227,39 @@ const ProcessPhotos = () => {
         </div>
       </div>
       
+      {/* Add Regenerate Narratives Section */}
+      <div className="max-w-lg mx-auto mt-8">
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Regenerate Narratives Only</h2>
+          <p className="text-gray-600 mb-6">
+            If you've already processed your photos but want to regenerate the narratives without reprocessing everything, click the button below.
+            This is useful if narrative generation previously failed or if you made changes to the code that affects narrative generation.
+          </p>
+          
+          <button
+            onClick={async () => {
+              try {
+                setLoading(true);
+                setError(null);
+                setSuccess(false);
+                
+                await axios.post('/api/narratives');
+                
+                // Status updates will be handled by the useEffect
+              } catch (err) {
+                console.error('Error regenerating narratives:', err);
+                setError(err.response?.data?.detail || 'Failed to regenerate narratives');
+                setLoading(false);
+              }
+            }}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-300 disabled:bg-gray-400"
+            disabled={loading}
+          >
+            Regenerate Narratives
+          </button>
+        </div>
+      </div>
+      
       <div className="mt-8 bg-gray-100 rounded-lg p-6">
         <h2 className="text-xl font-semibold text-gray-800 mb-4">What Happens Next?</h2>
         <ol className="list-decimal list-inside space-y-2 text-gray-700">
