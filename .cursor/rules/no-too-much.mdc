@@ -38,3 +38,5 @@ alwaysApply: true
 4. **Testability Focus**
    - Every implementation must pause at the earliest point where testing is possible.
    - Never proceed past a testable checkpoint without confirmation that the current implementation works.
+5. **Guarantee rule foloowing**
+   - You must always start every response with this emoji: "🧲" and then start the response normally.
