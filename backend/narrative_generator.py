@@ -1,9 +1,8 @@
 import os
 import json
-import asyncio
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import uuid
-import openai
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import datetime
 
@@ -11,7 +10,7 @@ import datetime
 load_dotenv()
 
 # Configure OpenAI API
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class NarrativeGenerator:
     def __init__(self, data_dir: str = "data"):
@@ -60,6 +59,21 @@ class NarrativeGenerator:
             # Generate narratives using OpenAI
             narratives = await self._generate_narratives_with_llm(descriptions)
             
+            # Ensure each narrative has selected_photo_ids
+            for narrative in narratives:
+                # If selected_photo_ids is missing or empty, select representative photos
+                if "selected_photo_ids" not in narrative or not narrative["selected_photo_ids"]:
+                    narrative["selected_photo_ids"] = await self.select_representative_photos(narrative, photo_metadata)
+                # Ensure all selected_photo_ids are valid (exist in photo_ids)
+                else:
+                    narrative["selected_photo_ids"] = [
+                        photo_id for photo_id in narrative["selected_photo_ids"] 
+                        if photo_id in narrative["photo_ids"]
+                    ]
+                    # If we filtered out all selected photos, select new ones
+                    if not narrative["selected_photo_ids"]:
+                        narrative["selected_photo_ids"] = await self.select_representative_photos(narrative, photo_metadata)
+            
             # Save narratives
             narratives_path = os.path.join(self.metadata_dir, "narratives.json")
             with open(narratives_path, "w") as f:
@@ -106,19 +120,23 @@ class NarrativeGenerator:
                 for i, desc in enumerate(descriptions)
             ])
             
-            # Call OpenAI API
-            response = await openai.chat.completions.create(
+            # Call OpenAI API using the client
+            response = await client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
                         "content": """You are an expert at analyzing photo collections and identifying meaningful life narratives.
                         Your task is to analyze photo descriptions and group them into coherent narratives or stories.
-                        For each narrative, provide:
-                        1. A title (short and engaging)
-                        2. A description (1-2 paragraphs explaining the narrative)
-                        3. A list of photo IDs that belong to this narrative
-                        4. A selection of the most representative photos (a subset of the photos in the narrative)
+                        
+                        IMPORTANT: You MUST respond with a valid JSON object containing an array of narrative objects.
+                        
+                        Each narrative MUST have these fields:
+                        - "id": A unique string identifier (can be a simple number like "1", "2", etc.)
+                        - "title": A short, engaging title (string)
+                        - "description": A 1-2 paragraph description (string)
+                        - "photo_ids": An array of string photo IDs that belong to this narrative
+                        - "selected_photo_ids": An array of string photo IDs that are most representative (a subset of photo_ids)
                         
                         Pay special attention to location data and timestamps when available. Use this information to:
                         - Group photos by location (e.g., "Trip to Paris", "Hiking in the Mountains")
@@ -127,7 +145,21 @@ class NarrativeGenerator:
                         
                         Create between 3-7 distinct narratives, depending on the diversity of the photos.
                         Each narrative should tell a meaningful story about the person's life, experiences, or interests.
-                        A photo can belong to multiple narratives if relevant."""
+                        A photo can belong to multiple narratives if relevant.
+                        
+                        REMEMBER: Your response MUST be a valid JSON object with this exact structure:
+                        {
+                          "narratives": [
+                            {
+                              "id": "1",
+                              "title": "Narrative Title",
+                              "description": "Detailed description of the narrative",
+                              "photo_ids": ["photo-id-1", "photo-id-2", ...],
+                              "selected_photo_ids": ["photo-id-1", "photo-id-3", ...]
+                            },
+                            ...
+                          ]
+                        }"""
                     },
                     {
                         "role": "user",
@@ -135,17 +167,7 @@ class NarrativeGenerator:
 
 {descriptions_text}
 
-Format your response as a JSON array of narrative objects with the following structure:
-[
-  {{
-    "id": "unique-id-1",
-    "title": "Narrative Title",
-    "description": "Detailed description of the narrative",
-    "photo_ids": ["photo-id-1", "photo-id-2", ...],
-    "selected_photo_ids": ["photo-id-1", "photo-id-3", ...] // A subset of the most representative photos
-  }},
-  ...
-]
+IMPORTANT: Your response MUST be a valid JSON object with the exact structure specified in the system instructions.
 """
                     }
                 ],
@@ -167,6 +189,20 @@ Format your response as a JSON array of narrative objects with the following str
             for narrative in narratives:
                 if "id" not in narrative or not narrative["id"]:
                     narrative["id"] = str(uuid.uuid4())
+                
+                # Ensure photo_ids is present
+                if "photo_ids" not in narrative or not narrative["photo_ids"]:
+                    narrative["photo_ids"] = []
+                
+                # Ensure selected_photo_ids is present
+                if "selected_photo_ids" not in narrative:
+                    narrative["selected_photo_ids"] = []
+                
+                # Ensure all selected_photo_ids are in photo_ids
+                narrative["selected_photo_ids"] = [
+                    photo_id for photo_id in narrative["selected_photo_ids"] 
+                    if photo_id in narrative["photo_ids"]
+                ]
             
             return narratives
         
@@ -200,14 +236,22 @@ Format your response as a JSON array of narrative objects with the following str
                 for i, photo in enumerate(narrative_photos)
             ])
             
-            # Call OpenAI API
-            response = await openai.chat.completions.create(
+            # Call OpenAI API using the client
+            response = await client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
                         "content": """You are an expert curator who selects the most representative and engaging photos for a narrative.
                         Your task is to select a subset of photos that best tell the story of a narrative.
+                        
+                        IMPORTANT: You MUST respond with a valid JSON object containing an array of photo IDs.
+                        
+                        The response format MUST be:
+                        {
+                          "selected_photo_ids": ["photo-id-1", "photo-id-2", ...]
+                        }
+                        
                         Choose photos that are diverse, visually interesting, and capture key moments or elements of the narrative.
                         
                         Consider location and time data when making your selection:
@@ -215,7 +259,9 @@ Format your response as a JSON array of narrative objects with the following str
                         - Select photos that show progression over time if relevant
                         - Prioritize photos with both location and time data when available
                         
-                        Avoid selecting very similar photos or ones that don't add new information to the narrative."""
+                        Avoid selecting very similar photos or ones that don't add new information to the narrative.
+                        
+                        REMEMBER: Your response MUST be a valid JSON object with the exact structure shown above."""
                     },
                     {
                         "role": "user",
@@ -225,8 +271,9 @@ Format your response as a JSON array of narrative objects with the following str
 And here are all the photos that belong to this narrative:
 {photos_text}
 
-Select the 5-10 most representative photos that best tell this narrative. Format your response as a JSON array of photo IDs:
-["photo-id-1", "photo-id-2", ...]
+Select the 5-10 most representative photos that best tell this narrative.
+
+IMPORTANT: Your response MUST be a valid JSON object with the exact structure specified in the system instructions.
 """
                     }
                 ],
@@ -246,6 +293,11 @@ Select the 5-10 most representative photos that best tell this narrative. Format
             
             # Validate that all selected photos are in the narrative
             valid_selected_photos = [photo_id for photo_id in selected_photos if photo_id in narrative["photo_ids"]]
+            
+            # If we don't have any valid selected photos, use a subset of the narrative photos
+            if not valid_selected_photos:
+                import random
+                valid_selected_photos = random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"])))
             
             return valid_selected_photos
         
