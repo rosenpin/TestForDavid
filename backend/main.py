@@ -57,7 +57,7 @@ processing_status = {
 }
 
 # Initialize processors
-photo_processor = PhotoProcessor(data_dir=DATA_DIR)
+photo_processor = PhotoProcessor(data_dir=DATA_DIR, enable_clustering=False)
 narrative_generator = NarrativeGenerator(data_dir=DATA_DIR)
 
 @app.get("/api")

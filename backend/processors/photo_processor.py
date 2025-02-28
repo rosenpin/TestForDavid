@@ -41,14 +41,22 @@ def ensure_serializable(data):
         return str(data)
 
 class PhotoProcessor:
-    def __init__(self, data_dir: str = "data"):
-        """Initialize the photo processor and its component processors."""
+    def __init__(self, data_dir: str = "data", enable_clustering: bool = True):
+        """Initialize the photo processor and its component processors.
+        
+        Args:
+            data_dir: Directory to store photos and metadata
+            enable_clustering: Whether to perform face clustering (can be disabled for faster processing)
+        """
         # Set up directories
         self.data_dir = data_dir
         self.photos_dir = os.path.join(data_dir, "photos")
         self.metadata_dir = os.path.join(data_dir, "metadata")
         self.photos_metadata_dir = os.path.join(self.metadata_dir, "photos")
         self.faces_dir = os.path.join(data_dir, "faces")
+        
+        # Store configuration
+        self.enable_clustering = enable_clustering
         
         # Create necessary directories
         ensure_directory(self.photos_dir)
@@ -92,7 +100,10 @@ class PhotoProcessor:
             copy_file(photo_path, destination_path)
             
             # Detect and process faces in the photo
-            faces_data = await self.face_processor.process_faces(destination_path, photo_id)
+            if self.enable_clustering:
+                faces_data = await self.face_processor.process_faces(destination_path, photo_id)
+            else:
+                faces_data = []
             
             # Generate description using OpenAI
             description = await self.description_generator.generate_description(destination_path)
@@ -207,8 +218,8 @@ class PhotoProcessor:
             if status_callback:
                 status_callback(processed_photos=processed_photos)
         
-        # After processing all photos, perform face clustering if we have detected faces
-        if self.face_processor.face_embeddings:
+        # After processing all photos, perform face clustering if we have detected faces and clustering is enabled
+        if self.enable_clustering and self.face_processor.face_embeddings:
             if status_callback:
                 status_callback(current_stage="clustering_faces")
             
@@ -220,5 +231,7 @@ class PhotoProcessor:
             if person_stats:
                 print("Person statistics:", json.dumps({k: {"face_count": v["face_count"], "photo_count": v["photo_count"]} 
                                                     for k, v in person_stats.items()}, indent=2))
+        elif not self.enable_clustering and self.face_processor.face_embeddings:
+            print("Face clustering disabled. Skipping clustering step for faster processing.")
         
         return all_metadata 
