@@ -1,7 +1,7 @@
 ---
-description: when running a pip install command or wanting to add or change a project dependency in python
+description: when running a pip install command or wanting to add or change a project dependency in python. you must always take that into account before executing commands!
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 Note that we are using uv with venv so use that and NEVER use pip install directly.
 Also, make sure to always update the [requirements.txt](mdc:backend/requirements.txt) file when adding/changing dependency rather than just running pip install.

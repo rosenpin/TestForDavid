@@ -48,7 +48,8 @@ class NarrativeGenerator:
                     "description": photo["description"],
                     "timestamp": photo["timestamp"],
                     "location": photo.get("location", None),
-                    "date_taken": datetime.datetime.fromtimestamp(photo["timestamp"]).strftime("%Y-%m-%d %H:%M:%S") if photo.get("timestamp") else None
+                    "date_taken": datetime.datetime.fromtimestamp(photo["timestamp"]).strftime("%Y-%m-%d %H:%M:%S") if photo.get("timestamp") else None,
+                    "location_name": self._format_location(photo.get("location", None))
                 }
                 for photo in photo_metadata
             ]
@@ -109,13 +110,34 @@ class NarrativeGenerator:
                 status_callback(error=str(e))
             raise
     
+    def _format_location(self, location: Dict[str, Any]) -> str:
+        """Format location information into a readable string."""
+        if not location:
+            return ""
+        
+        # Check if we have reverse geocoded information
+        if "city" in location and "country" in location:
+            if location["city"] and location["state"] and location["country"]:
+                return f"{location['city']}, {location['state']}, {location['country']}"
+            elif location["city"] and location["country"]:
+                return f"{location['city']}, {location['country']}"
+            elif location["country"]:
+                return location["country"]
+        
+        # Fallback to coordinates
+        if "latitude" in location and "longitude" in location:
+            return f"Coordinates: {location['latitude']:.6f}, {location['longitude']:.6f}"
+        
+        return ""
+    
     async def _generate_narratives_with_llm(self, descriptions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use OpenAI to generate narratives from photo descriptions."""
         try:
             # Prepare the prompt
             descriptions_text = "\n".join([
                 f"Photo {i+1} (ID: {desc['id']}): {desc['description']}" + 
-                (f" | Location: {desc['location']['latitude']}, {desc['location']['longitude']}" if desc.get('location') else "") +
+                (f" | Location: {desc['location_name']}" if desc.get('location_name') else 
+                 (f" | Coordinates: {desc['location']['latitude']}, {desc['location']['longitude']}" if desc.get('location') else "")) +
                 (f" | Date Taken: {desc['date_taken']}" if desc.get('date_taken') else "")
                 for i, desc in enumerate(descriptions)
             ])
@@ -231,7 +253,7 @@ IMPORTANT: Your response MUST be a valid JSON object with the exact structure sp
             # Prepare the prompt
             photos_text = "\n".join([
                 f"Photo {i+1} (ID: {photo['id']}): {photo['description']}" + 
-                (f" | Location: {photo['location']['latitude']}, {photo['location']['longitude']}" if photo.get('location') else "") +
+                (f" | Location: {self._format_location(photo.get('location'))}" if photo.get('location') else "") +
                 (f" | Date Taken: {datetime.datetime.fromtimestamp(photo['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}" if photo.get('timestamp') else "")
                 for i, photo in enumerate(narrative_photos)
             ])
