@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import os
 import json
 import shutil
@@ -13,6 +13,15 @@ import random
 
 from photo_processor import PhotoProcessor
 from narrative_generator import NarrativeGenerator
+
+# Constants for directory paths
+BASE_DIR = "."
+DATA_DIR = os.path.join(BASE_DIR, "data")
+PHOTOS_DIR = os.path.join(DATA_DIR, "photos")
+METADATA_DIR = os.path.join(DATA_DIR, "metadata")
+PHOTOS_METADATA_DIR = os.path.join(METADATA_DIR, "photos")
+TEMP_UPLOADS_DIR = os.path.join(DATA_DIR, "temp_uploads")
+NARRATIVES_FILE = os.path.join(METADATA_DIR, "narratives.json")
 
 app = FastAPI(title="Life Narrative Explorer")
 
@@ -26,14 +35,14 @@ app.add_middleware(
 )
 
 # Create necessary directories
-os.makedirs("data", exist_ok=True)
-os.makedirs("data/photos", exist_ok=True)
-os.makedirs("data/metadata", exist_ok=True)
-os.makedirs("data/metadata/photos", exist_ok=True)
-os.makedirs("data/temp_uploads", exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+os.makedirs(METADATA_DIR, exist_ok=True)
+os.makedirs(PHOTOS_METADATA_DIR, exist_ok=True)
+os.makedirs(TEMP_UPLOADS_DIR, exist_ok=True)
 
 # Mount static files directory for serving photos
-app.mount("/photos", StaticFiles(directory="data/photos"), name="photos")
+app.mount("/api/photo-files", StaticFiles(directory=PHOTOS_DIR), name="photos")
 
 # Global variables to track processing state
 processing_status = {
@@ -45,18 +54,18 @@ processing_status = {
 }
 
 # Initialize processors
-photo_processor = PhotoProcessor()
-narrative_generator = NarrativeGenerator()
+photo_processor = PhotoProcessor(data_dir=DATA_DIR)
+narrative_generator = NarrativeGenerator(data_dir=DATA_DIR)
 
-@app.get("/")
+@app.get("/api")
 async def read_root():
     return {"message": "Life Narrative Explorer API"}
 
-@app.get("/status")
+@app.get("/api/status")
 async def get_status():
     return processing_status
 
-@app.post("/process-directory")
+@app.post("/api/process-directory")
 async def process_directory(directory_path: str, background_tasks: BackgroundTasks):
     """Process all photos in a directory and generate narratives."""
     global processing_status
@@ -106,25 +115,25 @@ async def process_photos_and_generate_narratives(directory_path: str):
         processing_status["error"] = str(e)
         print(f"Error in background processing: {str(e)}")
 
-@app.get("/narratives")
+@app.get("/api/narratives")
 async def get_narratives():
     try:
-        if not os.path.exists("data/metadata/narratives.json"):
+        if not os.path.exists(NARRATIVES_FILE):
             return {"narratives": []}
         
-        with open("data/metadata/narratives.json", "r") as f:
+        with open(NARRATIVES_FILE, "r") as f:
             narratives = json.load(f)
         return {"narratives": narratives}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving narratives: {str(e)}")
 
-@app.get("/narratives/{narrative_id}")
+@app.get("/api/narratives/{narrative_id}")
 async def get_narrative(narrative_id: str):
     try:
-        if not os.path.exists("data/metadata/narratives.json"):
+        if not os.path.exists(NARRATIVES_FILE):
             raise HTTPException(status_code=404, detail="Narratives not found")
         
-        with open("data/metadata/narratives.json", "r") as f:
+        with open(NARRATIVES_FILE, "r") as f:
             narratives = json.load(f)
         
         for narrative in narratives:
@@ -135,20 +144,34 @@ async def get_narrative(narrative_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving narrative: {str(e)}")
 
-@app.get("/photos/{photo_id}")
+@app.get("/api/photos/{photo_id}")
 async def get_photo_metadata(photo_id: str):
     try:
-        photo_path = f"data/metadata/photos/{photo_id}.json"
+        # Check if the photo_id has a file extension
+        if "." in photo_id:
+            # This is likely a request for the actual photo file, not metadata
+            # Let the static file handler handle it
+            raise HTTPException(status_code=404, detail="Not Found")
+        
+        photo_path = os.path.join(PHOTOS_METADATA_DIR, f"{photo_id}.json")
+        
         if not os.path.exists(photo_path):
-            raise HTTPException(status_code=404, detail=f"Photo metadata not found for ID {photo_id}")
+            # Try to find the file in the old location
+            old_photo_path = os.path.join("data/metadata/photos", f"{photo_id}.json")
+            
+            if os.path.exists(old_photo_path):
+                photo_path = old_photo_path
+            else:
+                raise HTTPException(status_code=404, detail=f"Photo metadata not found for ID {photo_id}")
         
         with open(photo_path, "r") as f:
             photo_metadata = json.load(f)
         return photo_metadata
     except Exception as e:
+        print(f"Error retrieving photo metadata: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving photo metadata: {str(e)}")
 
-@app.post("/upload-photos")
+@app.post("/api/upload-photos")
 async def upload_photos(files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
     """Upload photos and process them."""
     global processing_status
@@ -167,20 +190,19 @@ async def upload_photos(files: List[UploadFile] = File(...), background_tasks: B
     
     try:
         # Create a temporary directory for uploads
-        temp_dir = "data/temp_uploads"
-        os.makedirs(temp_dir, exist_ok=True)
+        os.makedirs(TEMP_UPLOADS_DIR, exist_ok=True)
         
         # Save uploaded files
         saved_paths = []
         for file in files:
-            file_path = os.path.join(temp_dir, file.filename)
+            file_path = os.path.join(TEMP_UPLOADS_DIR, file.filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             saved_paths.append(file_path)
         
         # Start processing in the background
         if background_tasks:
-            background_tasks.add_task(process_photos_and_generate_narratives, temp_dir)
+            background_tasks.add_task(process_photos_and_generate_narratives, TEMP_UPLOADS_DIR)
         
         return {"message": f"Uploaded {len(files)} photos for processing"}
     
@@ -189,7 +211,7 @@ async def upload_photos(files: List[UploadFile] = File(...), background_tasks: B
         processing_status["error"] = str(e)
         raise HTTPException(status_code=500, detail=f"Error uploading photos: {str(e)}")
 
-@app.post("/narratives")
+@app.post("/api/narratives")
 async def generate_narrative(background_tasks: BackgroundTasks):
     """Generate narratives from existing photos."""
     global processing_status

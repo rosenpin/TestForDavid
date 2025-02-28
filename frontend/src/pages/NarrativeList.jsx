@@ -72,7 +72,7 @@ const NarrativeList = () => {
             {narrative.selected_photo_ids && narrative.selected_photo_ids.length > 0 && (
               <div className="h-48 overflow-hidden">
                 <img 
-                  src={`/api/photos/${narrative.selected_photo_ids[0]}`} 
+                  src={`/api/photo-files/${narrative.selected_photo_ids[0]}.jpg`} 
                   alt={narrative.title}
                   className="w-full h-full object-cover"
                 />

@@ -139,7 +139,7 @@ const NarrativeDetail = () => {
         <div className="photo-viewer bg-black rounded-lg shadow-lg overflow-hidden relative">
           <div className="relative">
             <img 
-              src={`/api/photos/${photos[currentPhotoIndex].filename}`} 
+              src={`/api/photo-files/${photos[currentPhotoIndex].filename}`} 
               alt={photos[currentPhotoIndex].description}
               className="w-full max-h-[70vh] object-contain mx-auto"
             />
@@ -199,7 +199,7 @@ const NarrativeDetail = () => {
           {photos.map((photo, index) => (
             <div key={photo.id} className="bg-white rounded-lg shadow-md overflow-hidden">
               <img 
-                src={`/api/photos/${photo.filename}`} 
+                src={`/api/photo-files/${photo.filename}`} 
                 alt={photo.description}
                 className="w-full h-64 object-cover cursor-pointer"
                 onClick={() => {
