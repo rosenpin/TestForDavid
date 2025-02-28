@@ -115,6 +115,10 @@ class NarrativeGenerator:
         if not location:
             return ""
         
+        # Use the pre-formatted location string if available
+        if location.get("formatted"):
+            return location["formatted"]
+        
         # Check if we have reverse geocoded information
         if "city" in location and "country" in location:
             if location["city"] and location["state"] and location["country"]:
@@ -194,7 +198,7 @@ IMPORTANT: Your response MUST be a valid JSON object with the exact structure sp
                     }
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=4000
+                max_tokens=40000
             )
             
             # Parse the response
