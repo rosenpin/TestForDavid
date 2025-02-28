@@ -179,40 +179,8 @@ const ProcessPhotos = () => {
         </div>
       )}
       
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* Directory Processing */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Process Photos from Directory</h2>
-          <p className="text-gray-600 mb-6">
-            Enter the path to a directory containing photos, and we'll process all the photos in that directory.
-          </p>
-          
-          <form onSubmit={handleDirectorySubmit}>
-            <div className="mb-4">
-              <label htmlFor="directoryPath" className="block text-gray-700 text-sm font-medium mb-2">
-                Directory Path
-              </label>
-              <input
-                type="text"
-                id="directoryPath"
-                value={directoryPath}
-                onChange={(e) => setDirectoryPath(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="/path/to/photos"
-                disabled={loading}
-              />
-            </div>
-            
-            <button
-              type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-300 disabled:bg-gray-400"
-              disabled={loading}
-            >
-              Process Directory
-            </button>
-          </form>
-        </div>
-        
+      <div className="max-w-lg mx-auto">
+       
         {/* File Upload */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-xl font-semibold text-gray-800 mb-4">Upload Photos</h2>
