@@ -318,7 +318,7 @@ IMPORTANT: Your response MUST be a valid JSON object with the exact structure sp
                     }
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=1000
+                max_tokens=2000
             )
             
             # Parse the response
