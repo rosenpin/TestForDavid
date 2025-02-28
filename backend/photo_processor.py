@@ -2,16 +2,23 @@ import os
 import json
 import base64
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import uuid
 import asyncio
 from PIL import Image
 import io
 import openai
+import exifread
+import datetime
+import pillow_heif
+from fractions import Fraction
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Register HEIF opener with Pillow
+pillow_heif.register_heif_opener()
 
 # Configure OpenAI API
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -37,6 +44,28 @@ class PhotoProcessor:
             # Get file extension
             file_extension = os.path.splitext(photo_path)[1].lower()
             
+            # Check if the file is a HEIC/HEIF file and if we should attempt conversion
+            if file_extension in ['.heic', '.heif']:
+                try:
+                    # Try to open the HEIC file to verify it's readable
+                    heif_file = pillow_heif.read_heif(photo_path)
+                    
+                    # If we got here, we can read the HEIC file, so continue processing
+                    print(f"Successfully verified HEIC/HEIF file: {photo_path}")
+                except Exception as e:
+                    print(f"Cannot process HEIC/HEIF file {photo_path}, error: {str(e)}")
+                    # Return minimal metadata for unreadable files
+                    return {
+                        "id": photo_id,
+                        "filename": f"{photo_id}{file_extension}",
+                        "original_path": photo_path,
+                        "description": "Unreadable HEIC/HEIF image file.",
+                        "timestamp": os.path.getmtime(photo_path),
+                        "location": None,
+                        "exif": {"error": f"Cannot process HEIC/HEIF format: {str(e)}"},
+                        "narratives": []
+                    }
+            
             # Create a new filename
             new_filename = f"{photo_id}{file_extension}"
             destination_path = os.path.join(self.photos_dir, new_filename)
@@ -44,6 +73,9 @@ class PhotoProcessor:
             # Copy the photo to our data directory
             with open(photo_path, "rb") as src_file, open(destination_path, "wb") as dst_file:
                 dst_file.write(src_file.read())
+            
+            # Extract EXIF data
+            exif_data = self._extract_exif_data(photo_path)
             
             # Generate description using OpenAI
             description = await self._generate_description(destination_path)
@@ -54,7 +86,9 @@ class PhotoProcessor:
                 "filename": new_filename,
                 "original_path": photo_path,
                 "description": description,
-                "timestamp": os.path.getmtime(photo_path),
+                "timestamp": exif_data.get("timestamp") or os.path.getmtime(photo_path),
+                "location": exif_data.get("location"),
+                "exif": exif_data.get("exif", {}),
                 "narratives": []  # Will be populated later
             }
             
@@ -67,13 +101,118 @@ class PhotoProcessor:
         
         except Exception as e:
             print(f"Error processing photo {photo_path}: {str(e)}")
-            raise
+            # Return minimal metadata for files with errors
+            return {
+                "id": photo_id if 'photo_id' in locals() else str(uuid.uuid4()),
+                "filename": f"{photo_id if 'photo_id' in locals() else str(uuid.uuid4())}{file_extension if 'file_extension' in locals() else os.path.splitext(photo_path)[1].lower()}",
+                "original_path": photo_path,
+                "description": f"Error processing image: {str(e)}",
+                "timestamp": os.path.getmtime(photo_path),
+                "location": None,
+                "exif": {"error": str(e)},
+                "narratives": []
+            }
+
+    def _extract_exif_data(self, image_path: str) -> Dict[str, Any]:
+        """Extract EXIF data from an image, including GPS location and capture time."""
+        result = {
+            "exif": {},
+            "location": None,
+            "timestamp": None
+        }
+        
+        try:
+            # Check if file is HEIC/HEIF
+            is_heic = image_path.lower().endswith(('.heic', '.heif'))
+            
+            # Extract EXIF data
+            if is_heic:
+                # For HEIC files, we need special handling
+                try:
+                    heif_file = pillow_heif.read_heif(image_path)
+                    # Convert to JPEG for easier processing
+                    img = Image.frombytes(
+                        heif_file.mode, 
+                        heif_file.size, 
+                        heif_file.data,
+                        "raw",
+                        heif_file.mode,
+                        heif_file.stride,
+                    )
+                    # Extract what we can from the image
+                    result["exif"] = {"Format": "HEIC/HEIF"}
+                    # We might not get EXIF from HEIC this way, but we tried
+                except Exception as e:
+                    print(f"Error processing HEIC/HEIF file {image_path}: {str(e)}")
+                    result["exif"] = {"Format": "HEIC/HEIF", "Error": str(e)}
+            else:
+                # For standard formats, use exifread
+                with open(image_path, 'rb') as f:
+                    tags = exifread.process_file(f, details=False)
+                    
+                    # Convert to a serializable dictionary
+                    for tag, value in tags.items():
+                        result["exif"][tag] = str(value)
+                    
+                    # Extract GPS coordinates if available
+                    if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
+                        lat = self._convert_to_degrees(tags['GPS GPSLatitude'].values)
+                        lon = self._convert_to_degrees(tags['GPS GPSLongitude'].values)
+                        
+                        # Check for reference direction (N/S, E/W)
+                        if 'GPS GPSLatitudeRef' in tags and str(tags['GPS GPSLatitudeRef']) == 'S':
+                            lat = -lat
+                        if 'GPS GPSLongitudeRef' in tags and str(tags['GPS GPSLongitudeRef']) == 'W':
+                            lon = -lon
+                        
+                        result["location"] = {"latitude": lat, "longitude": lon}
+                    
+                    # Extract timestamp if available
+                    if 'EXIF DateTimeOriginal' in tags:
+                        try:
+                            date_str = str(tags['EXIF DateTimeOriginal'])
+                            # Parse the date string (format typically: "YYYY:MM:DD HH:MM:SS")
+                            dt = datetime.datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                            result["timestamp"] = dt.timestamp()
+                        except Exception as e:
+                            print(f"Error parsing date from EXIF: {str(e)}")
+
+            return result
+        
+        except Exception as e:
+            print(f"Error extracting EXIF data from {image_path}: {str(e)}")
+            return result
+    
+    def _convert_to_degrees(self, value: Tuple[Fraction, Fraction, Fraction]) -> float:
+        """Helper function to convert GPS coordinates from EXIF to decimal degrees."""
+        degrees = float(value[0])
+        minutes = float(value[1]) / 60.0
+        seconds = float(value[2]) / 3600.0
+        return degrees + minutes + seconds
     
     async def _generate_description(self, image_path: str) -> str:
         """Generate a description for an image using OpenAI's Vision API."""
         try:
-            # Resize image if needed to reduce API costs
-            img = Image.open(image_path)
+            # Handle HEIC/HEIF format by converting to JPEG first if needed
+            if image_path.lower().endswith(('.heic', '.heif')):
+                try:
+                    # Open HEIC file and convert to JPEG format for API submission
+                    heif_file = pillow_heif.read_heif(image_path)
+                    img = Image.frombytes(
+                        heif_file.mode, 
+                        heif_file.size, 
+                        heif_file.data,
+                        "raw",
+                        heif_file.mode,
+                        heif_file.stride,
+                    )
+                except Exception as e:
+                    print(f"Error opening HEIC/HEIF file {image_path}: {str(e)}")
+                    return "Could not process HEIC/HEIF image format."
+            else:
+                # Resize image if needed to reduce API costs
+                img = Image.open(image_path)
+            
             max_size = 1024  # Max dimension
             if max(img.size) > max_size:
                 ratio = max_size / max(img.size)
@@ -112,7 +251,7 @@ class PhotoProcessor:
     
     async def process_directory(self, directory_path: str, status_callback=None) -> List[Dict[str, Any]]:
         """Process all photos in a directory."""
-        photo_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        photo_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif']
         photo_paths = []
         
         # Find all photos in the directory

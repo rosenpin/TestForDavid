@@ -5,6 +5,7 @@ from typing import Dict, List, Any, Optional
 import uuid
 import openai
 from dotenv import load_dotenv
+import datetime
 
 # Load environment variables
 load_dotenv()
@@ -46,7 +47,9 @@ class NarrativeGenerator:
                 {
                     "id": photo["id"],
                     "description": photo["description"],
-                    "timestamp": photo["timestamp"]
+                    "timestamp": photo["timestamp"],
+                    "location": photo.get("location", None),
+                    "date_taken": datetime.datetime.fromtimestamp(photo["timestamp"]).strftime("%Y-%m-%d %H:%M:%S") if photo.get("timestamp") else None
                 }
                 for photo in photo_metadata
             ]
@@ -97,13 +100,15 @@ class NarrativeGenerator:
         try:
             # Prepare the prompt
             descriptions_text = "\n".join([
-                f"Photo {i+1} (ID: {desc['id']}): {desc['description']}"
+                f"Photo {i+1} (ID: {desc['id']}): {desc['description']}" + 
+                (f" | Location: {desc['location']['latitude']}, {desc['location']['longitude']}" if desc.get('location') else "") +
+                (f" | Date Taken: {desc['date_taken']}" if desc.get('date_taken') else "")
                 for i, desc in enumerate(descriptions)
             ])
             
             # Call OpenAI API
             response = await openai.chat.completions.create(
-                model="gpt-4-turbo",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
@@ -114,6 +119,11 @@ class NarrativeGenerator:
                         2. A description (1-2 paragraphs explaining the narrative)
                         3. A list of photo IDs that belong to this narrative
                         4. A selection of the most representative photos (a subset of the photos in the narrative)
+                        
+                        Pay special attention to location data and timestamps when available. Use this information to:
+                        - Group photos by location (e.g., "Trip to Paris", "Hiking in the Mountains")
+                        - Identify chronological sequences of events
+                        - Detect patterns in time (seasonal activities, annual events, etc.)
                         
                         Create between 3-7 distinct narratives, depending on the diversity of the photos.
                         Each narrative should tell a meaningful story about the person's life, experiences, or interests.
@@ -184,19 +194,27 @@ Format your response as a JSON array of narrative objects with the following str
         try:
             # Prepare the prompt
             photos_text = "\n".join([
-                f"Photo {i+1} (ID: {photo['id']}): {photo['description']}"
+                f"Photo {i+1} (ID: {photo['id']}): {photo['description']}" + 
+                (f" | Location: {photo['location']['latitude']}, {photo['location']['longitude']}" if photo.get('location') else "") +
+                (f" | Date Taken: {datetime.datetime.fromtimestamp(photo['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}" if photo.get('timestamp') else "")
                 for i, photo in enumerate(narrative_photos)
             ])
             
             # Call OpenAI API
             response = await openai.chat.completions.create(
-                model="gpt-4-turbo",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
                         "content": """You are an expert curator who selects the most representative and engaging photos for a narrative.
                         Your task is to select a subset of photos that best tell the story of a narrative.
                         Choose photos that are diverse, visually interesting, and capture key moments or elements of the narrative.
+                        
+                        Consider location and time data when making your selection:
+                        - Include photos from different locations if the narrative spans multiple places
+                        - Select photos that show progression over time if relevant
+                        - Prioritize photos with both location and time data when available
+                        
                         Avoid selecting very similar photos or ones that don't add new information to the narrative."""
                     },
                     {
