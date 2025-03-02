@@ -20,6 +20,11 @@ def clean_json_string(json_string: str) -> str:
     Returns:
         A cleaned JSON string
     """
+    # Check if the input is empty or whitespace only
+    if not json_string or json_string.isspace():
+        print("Error in clean_json_string: Empty JSON string received")
+        return "{}"  # Return empty JSON object instead of empty string
+    
     # Extract JSON content if it's wrapped in ```json ... ``` or similar
     json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', json_string)
     if json_match:

@@ -47,7 +47,7 @@ class NarrativeSummarizer:
             model=model,
             messages=messages,
             response_format={"type": "json_object"},
-            max_completion_tokens=1000
+            max_completion_tokens=2000
         )
         
         # Process the response
@@ -102,7 +102,7 @@ class NarrativeSummarizer:
             model=model,
             messages=messages,
             response_format={"type": "json_object"},
-            max_completion_tokens=2000
+            max_completion_tokens=4000
         )
         
         # Process the response

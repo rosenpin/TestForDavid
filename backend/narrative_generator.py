@@ -52,7 +52,7 @@ class NarrativeGenerator:
         self.generator = ModularNarrativeGenerator(
             api_key=self.api_key,
             model="o1",
-            batch_size=25,
+            batch_size=100,
             max_concurrent_batches=5,
             debug_mode=True  # Enable debug mode for development
         )
@@ -191,7 +191,7 @@ class NarrativeGenerator:
                             "title": theme,
                             "description": narrative_result.get("narrative", "A collection of photos."),
                             "photo_ids": related_photos,
-                            "selected_photo_ids": related_photos[:min(10, len(related_photos))]
+                            "selected_photo_ids": self.select_photos_for_display(related_photos)
                         })
                 else:
                     # Create one narrative per batch summary
@@ -215,7 +215,7 @@ class NarrativeGenerator:
                             "title": batch.get("meta_summary", f"Batch {i+1}"),
                             "description": batch.get("summary", "A collection of photos."),
                             "photo_ids": batch_photos,
-                            "selected_photo_ids": batch_photos[:min(10, len(batch_photos))]
+                            "selected_photo_ids": self.select_photos_for_display(batch_photos)
                         })
             else:
                 # Just create a single narrative with all photos
@@ -225,7 +225,7 @@ class NarrativeGenerator:
                     "title": narrative_result.get("title", "Photo Collection"),
                     "description": narrative_result.get("narrative", "A collection of photos."),
                     "photo_ids": photo_ids,
-                    "selected_photo_ids": photo_ids[:min(10, len(photo_ids))]
+                    "selected_photo_ids": self.select_photos_for_display(photo_ids)
                 })
             
             # Save the narratives to file
@@ -288,16 +288,22 @@ class NarrativeGenerator:
                theme_lower in batch.get("summary", "").lower():
                 # This batch is related to the theme
                 for photo in photos:
-                    photo_text = (photo.get("caption", "") + " " + 
-                                 photo.get("location", "")).lower()
+                    # Ensure we're concatenating strings
+                    caption = str(photo.get("caption", "")) if photo.get("caption") is not None else ""
+                    location = str(photo.get("location", "")) if photo.get("location") is not None else ""
+                    photo_text = (caption + " " + location).lower()
+                    
                     if any(kw in photo_text for kw in batch.get("keywords", [])):
                         related_photos.add(photo["id"])
         
         # If we didn't find any photos, search directly in photo captions
         if not related_photos:
             for photo in photos:
-                photo_text = (photo.get("caption", "") + " " + 
-                             photo.get("location", "")).lower()
+                # Ensure we're concatenating strings
+                caption = str(photo.get("caption", "")) if photo.get("caption") is not None else ""
+                location = str(photo.get("location", "")) if photo.get("location") is not None else ""
+                photo_text = (caption + " " + location).lower()
+                
                 if theme_lower in photo_text:
                     related_photos.add(photo["id"])
         
@@ -306,4 +312,26 @@ class NarrativeGenerator:
             sample_size = min(50, len(photos))
             related_photos = set(p["id"] for p in random.sample(photos, sample_size))
         
-        return list(related_photos) 
+        return list(related_photos)
+    
+    def select_photos_for_display(self, photo_ids: List[str], max_photos: Optional[int] = None) -> List[str]:
+        """Select photos to display in the narrative.
+        
+        This function can be used to intelligently select a subset of photos for display.
+        For now, it simply returns all photos without restriction.
+        
+        Args:
+            photo_ids: List of all photo IDs
+            max_photos: Optional maximum number of photos to select
+            
+        Returns:
+            List of selected photo IDs
+        """
+        # For now, just return all photos without any limit
+        return photo_ids
+        
+        # Future implementation could intelligently select photos based on:
+        # - Image quality
+        # - Diversity of content
+        # - Temporal distribution
+        # - Etc. 

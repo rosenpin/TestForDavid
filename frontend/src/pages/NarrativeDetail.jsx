@@ -8,6 +8,7 @@ const NarrativeDetail = () => {
   const [photos, setPhotos] = useState([]);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState({ loaded: 0, total: 0 });
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('slideshow'); // 'slideshow' or 'grid'
 
@@ -22,14 +23,41 @@ const NarrativeDetail = () => {
         
         // Fetch photo details for each photo in the narrative
         const photoIds = narrativeResponse.data.selected_photo_ids || [];
-        const photoPromises = photoIds.map(photoId => 
-          axios.get(`/api/photos/${photoId}`)
-        );
+        setLoadingProgress({ loaded: 0, total: photoIds.length });
         
-        const photoResponses = await Promise.all(photoPromises);
-        const photoData = photoResponses.map(response => response.data);
+        // Process photos in smaller batches to avoid too many concurrent requests
+        const batchSize = 5; // Process 5 photos at a time
+        const photoData = [];
+        
+        for (let i = 0; i < photoIds.length; i += batchSize) {
+          const batch = photoIds.slice(i, i + batchSize);
+          const batchPromises = batch.map(photoId => 
+            axios.get(`/api/photos/${photoId}`)
+              .catch(err => {
+                console.warn(`Failed to load photo ${photoId}:`, err);
+                // Return a placeholder instead of failing completely
+                return { 
+                  data: { 
+                    id: photoId,
+                    filename: 'placeholder.jpg', 
+                    description: 'Image could not be loaded',
+                    error: true
+                  } 
+                };
+              })
+          );
+          
+          const batchResponses = await Promise.all(batchPromises);
+          photoData.push(...batchResponses.map(response => response.data));
+          
+          // Update progress
+          setLoadingProgress({ 
+            loaded: Math.min(i + batchSize, photoIds.length), 
+            total: photoIds.length 
+          });
+        }
+        
         setPhotos(photoData);
-        
         setLoading(false);
       } catch (err) {
         console.error('Error fetching narrative details:', err);
@@ -70,8 +98,19 @@ const NarrativeDetail = () => {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      <div className="flex flex-col justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+        {loadingProgress.total > 0 && (
+          <div className="text-gray-600">
+            Loading photos ({loadingProgress.loaded} of {loadingProgress.total})...
+            <div className="w-64 bg-gray-200 rounded-full h-2.5 mt-2">
+              <div 
+                className="bg-blue-500 h-2.5 rounded-full" 
+                style={{ width: `${(loadingProgress.loaded / loadingProgress.total) * 100}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -138,11 +177,70 @@ const NarrativeDetail = () => {
       {viewMode === 'slideshow' && photos.length > 0 && (
         <div className="photo-viewer bg-black rounded-lg shadow-lg overflow-hidden relative">
           <div className="relative">
-            <img 
-              src={`/api/photo-files/${photos[currentPhotoIndex].filename}`} 
-              alt={photos[currentPhotoIndex].description}
-              className="w-full max-h-[70vh] object-contain mx-auto"
-            />
+            {photos[currentPhotoIndex].error ? (
+              <div className="w-full h-[70vh] flex items-center justify-center bg-gray-200">
+                <div className="text-center p-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <p className="mt-4 text-gray-600">Image could not be loaded</p>
+                </div>
+              </div>
+            ) : (
+              <img 
+                src={`/api/photo-files/${photos[currentPhotoIndex].filename}`} 
+                alt={photos[currentPhotoIndex].description}
+                className="w-full max-h-[70vh] object-contain mx-auto"
+                onError={(e) => {
+                  const imgElement = e.target;
+                  const photoId = photos[currentPhotoIndex].id;
+                  const filename = photos[currentPhotoIndex].filename;
+                  
+                  // Check if filename already has an extension
+                  const hasExtension = /\.\w+$/.test(filename);
+                  
+                  if (!hasExtension) {
+                    // Try with common image extensions
+                    if (!imgElement.getAttribute('data-tried-jpg')) {
+                      imgElement.setAttribute('data-tried-jpg', 'true');
+                      imgElement.src = `/api/photo-files/${filename}.jpg`;
+                    } else if (!imgElement.getAttribute('data-tried-jpeg')) {
+                      imgElement.setAttribute('data-tried-jpeg', 'true');
+                      imgElement.src = `/api/photo-files/${filename}.jpeg`;
+                    } else if (!imgElement.getAttribute('data-tried-png')) {
+                      imgElement.setAttribute('data-tried-png', 'true');
+                      imgElement.src = `/api/photo-files/${filename}.png`;
+                    } else if (!imgElement.getAttribute('data-tried-id')) {
+                      // Try using just the photo ID
+                      imgElement.setAttribute('data-tried-id', 'true');
+                      imgElement.src = `/api/photo-files/${photoId}`;
+                    } else {
+                      // If all attempts fail, mark as error
+                      const updatedPhotos = [...photos];
+                      updatedPhotos[currentPhotoIndex] = {
+                        ...updatedPhotos[currentPhotoIndex],
+                        error: true
+                      };
+                      setPhotos(updatedPhotos);
+                    }
+                  } else {
+                    // If filename has extension but still failed, try photoId
+                    if (!imgElement.getAttribute('data-tried-id')) {
+                      imgElement.setAttribute('data-tried-id', 'true');
+                      imgElement.src = `/api/photo-files/${photoId}`;
+                    } else {
+                      // Mark as error if that also fails
+                      const updatedPhotos = [...photos];
+                      updatedPhotos[currentPhotoIndex] = {
+                        ...updatedPhotos[currentPhotoIndex],
+                        error: true
+                      };
+                      setPhotos(updatedPhotos);
+                    }
+                  }
+                }}
+              />
+            )}
             
             <div className="photo-controls absolute inset-0 flex justify-between items-center px-4">
               <button 
@@ -198,15 +296,75 @@ const NarrativeDetail = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {photos.map((photo, index) => (
             <div key={photo.id} className="bg-white rounded-lg shadow-md overflow-hidden">
-              <img 
-                src={`/api/photo-files/${photo.filename}`} 
-                alt={photo.description}
-                className="w-full h-64 object-cover cursor-pointer"
-                onClick={() => {
-                  setCurrentPhotoIndex(index);
-                  setViewMode('slideshow');
-                }}
-              />
+              {photo.error ? (
+                <div className="h-64 bg-gray-200 flex items-center justify-center">
+                  <div className="text-center p-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <p className="mt-2 text-sm text-gray-600">Image could not be loaded</p>
+                  </div>
+                </div>
+              ) : (
+                <img 
+                  src={`/api/photo-files/${photo.filename}`} 
+                  alt={photo.description}
+                  className="w-full h-64 object-cover cursor-pointer"
+                  loading="lazy"
+                  onClick={() => {
+                    setCurrentPhotoIndex(index);
+                    setViewMode('slideshow');
+                  }}
+                  onError={(e) => {
+                    const imgElement = e.target;
+                    const photoId = photo.id;
+                    const filename = photo.filename;
+                    
+                    // Check if filename already has an extension
+                    const hasExtension = /\.\w+$/.test(filename);
+                    
+                    if (!hasExtension) {
+                      // Try with common image extensions
+                      if (!imgElement.getAttribute('data-tried-jpg')) {
+                        imgElement.setAttribute('data-tried-jpg', 'true');
+                        imgElement.src = `/api/photo-files/${filename}.jpg`;
+                      } else if (!imgElement.getAttribute('data-tried-jpeg')) {
+                        imgElement.setAttribute('data-tried-jpeg', 'true');
+                        imgElement.src = `/api/photo-files/${filename}.jpeg`;
+                      } else if (!imgElement.getAttribute('data-tried-png')) {
+                        imgElement.setAttribute('data-tried-png', 'true');
+                        imgElement.src = `/api/photo-files/${filename}.png`;
+                      } else if (!imgElement.getAttribute('data-tried-id')) {
+                        // Try using just the photo ID
+                        imgElement.setAttribute('data-tried-id', 'true');
+                        imgElement.src = `/api/photo-files/${photoId}`;
+                      } else {
+                        // If all attempts fail, mark as error
+                        const updatedPhotos = [...photos];
+                        updatedPhotos[index] = {
+                          ...updatedPhotos[index],
+                          error: true
+                        };
+                        setPhotos(updatedPhotos);
+                      }
+                    } else {
+                      // If filename has extension but still failed, try photoId
+                      if (!imgElement.getAttribute('data-tried-id')) {
+                        imgElement.setAttribute('data-tried-id', 'true');
+                        imgElement.src = `/api/photo-files/${photoId}`;
+                      } else {
+                        // Mark as error if that also fails
+                        const updatedPhotos = [...photos];
+                        updatedPhotos[index] = {
+                          ...updatedPhotos[index],
+                          error: true
+                        };
+                        setPhotos(updatedPhotos);
+                      }
+                    }
+                  }}
+                />
+              )}
               <div className="p-4">
                 <p className="text-gray-600 line-clamp-3">{photo.description}</p>
                 {photo.location && (

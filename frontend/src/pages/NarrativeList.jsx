@@ -72,9 +72,41 @@ const NarrativeList = () => {
             {narrative.selected_photo_ids && narrative.selected_photo_ids.length > 0 && (
               <div className="h-48 overflow-hidden">
                 <img 
-                  src={`/api/photo-files/${narrative.selected_photo_ids[0]}.jpg`} 
+                  src={`/api/photo-files/${narrative.selected_photo_ids[0]}`} 
                   alt={narrative.title}
                   className="w-full h-full object-cover"
+                  loading="lazy"
+                  onError={(e) => {
+                    // If the image fails to load, try with different extensions
+                    const imgElement = e.target;
+                    const photoId = narrative.selected_photo_ids[0];
+                    
+                    // Only append extension if the photoId doesn't already have one
+                    // Check if photoId contains a dot followed by file extension
+                    const hasExtension = /\.\w+$/.test(photoId);
+                    
+                    if (!hasExtension) {
+                      // Try with common image extensions
+                      if (!imgElement.getAttribute('data-tried-jpg')) {
+                        imgElement.setAttribute('data-tried-jpg', 'true');
+                        imgElement.src = `/api/photo-files/${photoId}.jpg`;
+                      } else if (!imgElement.getAttribute('data-tried-jpeg')) {
+                        imgElement.setAttribute('data-tried-jpeg', 'true');
+                        imgElement.src = `/api/photo-files/${photoId}.jpeg`;
+                      } else if (!imgElement.getAttribute('data-tried-png')) {
+                        imgElement.setAttribute('data-tried-png', 'true');
+                        imgElement.src = `/api/photo-files/${photoId}.png`;
+                      } else {
+                        // If all formats fail, replace with placeholder
+                        imgElement.src = 'https://www.svgrepo.com/show/508699/landscape-placeholder.svg';
+                        imgElement.classList.add('placeholder-img');
+                      }
+                    } else {
+                      // Already has extension but still failed, use placeholder
+                      imgElement.src = 'https://www.svgrepo.com/show/508699/landscape-placeholder.svg';
+                      imgElement.classList.add('placeholder-img');
+                    }
+                  }}
                 />
               </div>
             )}
