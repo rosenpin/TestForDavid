@@ -70,6 +70,9 @@ class BatchProcessor:
         # Wait for all batches to complete
         batch_summaries = await asyncio.gather(*tasks)
         
+        # Filter out None values (failed batches)
+        batch_summaries = [summary for summary in batch_summaries if summary is not None]
+        
         # Return the batch summaries
         return batch_summaries
     
@@ -81,7 +84,7 @@ class BatchProcessor:
         batch_id: str,
         batch_num: int,
         total_batches: int
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Process a batch of photos with semaphore for concurrency control.
         
         Args:
@@ -93,72 +96,80 @@ class BatchProcessor:
             total_batches: Total number of batches
             
         Returns:
-            Batch summary dictionary
+            Batch summary dictionary or None if processing failed
         """
         async with semaphore:
             logger.info(f"Processing batch {batch_num}/{total_batches} with {len(batch)} photos")
             
-            # Save debug info if enabled
-            if self.debug_mode:
-                await save_debug_info(batch_id, batch, "debug_output/batches")
-            
-            # Try to determine date range for the batch
-            date_range = self._extract_date_range(batch)
-            
-            # Create batch context with metadata about the batch
-            batch_context = {
-                "batch_id": batch_id,
-                "batch_size": len(batch),
-                "batch_number": batch_num,
-                "total_batches": total_batches
-            }
-            
-            if date_range:
-                batch_context["date_range"] = date_range
-            
-            # Generate summary for the batch
-            summary = await self.summarizer.summarize_batch(
-                batch, model, include_meta_summary=True, batch_context=batch_context
-            )
-            
-            # Add batch metadata to the summary
-            summary["batch_id"] = batch_id
-            summary["batch_size"] = len(batch)
-            summary["batch_number"] = batch_num
-            summary["total_batches"] = total_batches
-            
-            # Add date range if available
-            if date_range:
-                summary["date_range"] = date_range
-            
-            # Keep track of photos in this batch (store minimal data)
-            photo_references = []
-            for photo in batch:
-                photo_ref = {
-                    "id": photo.get("id", ""),
-                    "filename": photo.get("filename", ""),
+            try:
+                # Save debug info if enabled
+                if self.debug_mode:
+                    await save_debug_info(batch_id, batch, "debug_output/batches")
+                
+                # Try to determine date range for the batch
+                date_range = self._extract_date_range(batch)
+                
+                # Create batch context with metadata about the batch
+                batch_context = {
+                    "batch_id": batch_id,
+                    "batch_size": len(batch),
+                    "batch_number": batch_num,
+                    "total_batches": total_batches
                 }
                 
-                # Include minimal metadata
-                if "location" in photo:
-                    photo_ref["location"] = photo.get("location")
+                if date_range:
+                    batch_context["date_range"] = date_range
                 
-                if "timestamp" in photo:
-                    photo_ref["timestamp"] = photo.get("timestamp")
+                # Generate summary for the batch
+                summary = await self.summarizer.summarize_batch(
+                    batch, model, include_meta_summary=True, batch_context=batch_context
+                )
                 
-                if "date" in photo:
-                    photo_ref["date"] = photo.get("date")
+                # Add batch metadata to the summary
+                summary["batch_id"] = batch_id
+                summary["batch_size"] = len(batch)
+                summary["batch_number"] = batch_num
+                summary["total_batches"] = total_batches
                 
-                photo_references.append(photo_ref)
-            
-            # Add photo references to the summary
-            summary["photos"] = photo_references
-            
-            # Save debug info if enabled
-            if self.debug_mode:
-                await save_debug_info(f"{batch_id}_summary", summary, "debug_output/summaries")
-            
-            return summary
+                # Add date range if available
+                if date_range:
+                    summary["date_range"] = date_range
+                
+                # Keep track of photos in this batch (store minimal data)
+                photo_references = []
+                for photo in batch:
+                    photo_ref = {
+                        "id": photo.get("id", ""),
+                        "filename": photo.get("filename", ""),
+                    }
+                    
+                    # Include minimal metadata
+                    if "location" in photo:
+                        photo_ref["location"] = photo.get("location")
+                    
+                    if "timestamp" in photo:
+                        photo_ref["timestamp"] = photo.get("timestamp")
+                    
+                    if "date" in photo:
+                        photo_ref["date"] = photo.get("date")
+                    
+                    photo_references.append(photo_ref)
+                
+                # Add photo references to the summary
+                summary["photos"] = photo_references
+                
+                # Save debug info if enabled
+                if self.debug_mode:
+                    await save_debug_info(f"{batch_id}_summary", summary, "debug_output/summaries")
+                
+                return summary
+                
+            except ValueError as e:
+                logger.error(f"Failed to process batch {batch_id}: {str(e)}")
+                return None
+            except Exception as e:
+                logger.error(f"Unexpected error processing batch {batch_id}: {str(e)}")
+                return None
     
     def _sort_photos(self, photos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sort photos by date if available.

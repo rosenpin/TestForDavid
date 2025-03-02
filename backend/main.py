@@ -12,7 +12,7 @@ import asyncio
 import random
 
 from processors import PhotoProcessor
-from narrative_generator import NarrativeGenerator
+from narrative_generator import InnerNarrativeGenerator
 
 # Constants for directory paths
 BASE_DIR = "."
@@ -58,7 +58,7 @@ processing_status = {
 
 # Initialize processors
 photo_processor = PhotoProcessor(data_dir=DATA_DIR, enable_clustering=False)
-narrative_generator = NarrativeGenerator(data_dir=DATA_DIR)
+narrative_generator = InnerNarrativeGenerator(data_dir=DATA_DIR)
 
 @app.get("/api")
 async def read_root():

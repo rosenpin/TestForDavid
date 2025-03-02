@@ -27,7 +27,7 @@ class NarrativeSummarizer:
         model: str,
         include_meta_summary: bool = True,
         batch_context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Generate a summary for a batch of photos.
         
         Args:
@@ -37,7 +37,7 @@ class NarrativeSummarizer:
             batch_context: Optional context about how the batch was created
             
         Returns:
-            Dictionary with batch summary information
+            Dictionary with batch summary information, or None if summary generation fails
         """
         logger.info(f"Summarizing batch of {len(batch_photos)} photos")
         
@@ -47,45 +47,48 @@ class NarrativeSummarizer:
         # Prepare the prompt for the summarization
         messages = self._prepare_batch_summary_prompt(batch_photos, batch_theme)
         
-        # Make the API call
-        response = await self.openai_client.call_with_retry(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            max_completion_tokens=2000
-        )
-        
-        # Process the response
-        summary_text = response.choices[0].message.content
-        cleaned_json = clean_json_string(summary_text)
-        
         try:
+            # Make the API call
+            response = await self.openai_client.call_with_retry(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                max_completion_tokens=2000
+            )
+            
+            # Process the response
+            summary_text = response.choices[0].message.content
+            cleaned_json = clean_json_string(summary_text)
+            
             summary_data = json.loads(cleaned_json)
+            
+            # Validate that we have a proper summary
+            if summary_data.get("summary") == "Failed to generate summary due to an error.":
+                logger.error("Summary generation failed with default error message")
+                return None
+            
+            # Extract keywords from the summary for better consolidation
+            keywords = extract_keywords(summary_data.get("summary", ""))
+            summary_data["keywords"] = keywords
+            
+            # If we detected a theme, include it in the summary
+            if batch_theme:
+                summary_data["detected_theme"] = batch_theme
+            
+            # Add meta-summary if requested
+            if include_meta_summary and len(batch_photos) > 1:
+                meta_summary = await self._generate_meta_summary(summary_data, model)
+                summary_data["meta_summary"] = meta_summary
+            
+            return summary_data
+            
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse batch summary JSON: {e}")
             logger.error(f"Received content: {summary_text}")
-            # Return a minimal valid structure if parsing fails
-            summary_data = {
-                "summary": "Failed to generate summary due to an error.",
-                "topics": [],
-                "people": [],
-                "locations": []
-            }
-        
-        # Extract keywords from the summary for better consolidation
-        keywords = extract_keywords(summary_data.get("summary", ""))
-        summary_data["keywords"] = keywords
-        
-        # If we detected a theme, include it in the summary
-        if batch_theme:
-            summary_data["detected_theme"] = batch_theme
-        
-        # Add meta-summary if requested
-        if include_meta_summary and len(batch_photos) > 1:
-            meta_summary = await self._generate_meta_summary(summary_data, model)
-            summary_data["meta_summary"] = meta_summary
-        
-        return summary_data
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during summary generation: {str(e)}")
+            return None
     
     async def consolidate_summaries(
         self, 

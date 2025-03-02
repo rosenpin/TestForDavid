@@ -26,7 +26,7 @@ from narrative.utils import save_debug_info
 # Load environment variables
 load_dotenv()
 
-class NarrativeGenerator:
+class InnerNarrativeGenerator:
     """Narrative generator for photo collections that maintains the original API."""
     
     def __init__(self, data_dir: str = "data"):
