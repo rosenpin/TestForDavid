@@ -25,7 +25,8 @@ class NarrativeSummarizer:
         self, 
         batch_photos: List[Dict[str, Any]], 
         model: str,
-        include_meta_summary: bool = True
+        include_meta_summary: bool = True,
+        batch_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a summary for a batch of photos.
         
@@ -33,14 +34,18 @@ class NarrativeSummarizer:
             batch_photos: List of photo objects with metadata
             model: The OpenAI model to use
             include_meta_summary: Whether to include meta-summary
+            batch_context: Optional context about how the batch was created
             
         Returns:
             Dictionary with batch summary information
         """
         logger.info(f"Summarizing batch of {len(batch_photos)} photos")
         
+        # Extract batch theme if available (for semantic batches)
+        batch_theme = self._detect_batch_theme(batch_photos)
+        
         # Prepare the prompt for the summarization
-        messages = self._prepare_batch_summary_prompt(batch_photos)
+        messages = self._prepare_batch_summary_prompt(batch_photos, batch_theme)
         
         # Make the API call
         response = await self.openai_client.call_with_retry(
@@ -70,6 +75,10 @@ class NarrativeSummarizer:
         # Extract keywords from the summary for better consolidation
         keywords = extract_keywords(summary_data.get("summary", ""))
         summary_data["keywords"] = keywords
+        
+        # If we detected a theme, include it in the summary
+        if batch_theme:
+            summary_data["detected_theme"] = batch_theme
         
         # Add meta-summary if requested
         if include_meta_summary and len(batch_photos) > 1:
@@ -160,11 +169,80 @@ class NarrativeSummarizer:
         # Return the meta-summary text
         return response.choices[0].message.content.strip()
     
-    def _prepare_batch_summary_prompt(self, batch_photos: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    def _detect_batch_theme(self, batch_photos: List[Dict[str, Any]]) -> Optional[str]:
+        """Detect the theme of a batch based on metadata without AI calls.
+        
+        Args:
+            batch_photos: List of photo objects with metadata
+            
+        Returns:
+            Detected theme or None if no clear theme
+        """
+        # Check if all photos share the same location
+        locations = set()
+        for photo in batch_photos:
+            location = photo.get("location", {})
+            if location and isinstance(location, dict):
+                if location.get("city"):
+                    locations.add(location.get("city"))
+                elif location.get("country"):
+                    locations.add(location.get("country"))
+                elif location.get("formatted"):
+                    locations.add(location.get("formatted"))
+        
+        if len(locations) == 1:
+            location = next(iter(locations))
+            return f"Location: {location}"
+            
+        # Check time proximity
+        if len(batch_photos) > 1:
+            timestamps = []
+            for photo in batch_photos:
+                timestamp = photo.get("timestamp")
+                if timestamp:
+                    try:
+                        timestamps.append(float(timestamp))
+                    except (ValueError, TypeError):
+                        pass
+            
+            if timestamps and max(timestamps) - min(timestamps) < 24 * 60 * 60:
+                return "Event: Single day event"
+            
+        # Look for common keywords in descriptions
+        common_themes = {
+            "vacation": 0, "holiday": 0, "travel": 0, "trip": 0,
+            "wedding": 0, "celebration": 0, "party": 0, "birthday": 0,
+            "family": 0, "friends": 0, "beach": 0, "mountain": 0, 
+            "city": 0, "food": 0, "dinner": 0, "lunch": 0
+        }
+        
+        total_photos = len(batch_photos)
+        for photo in batch_photos:
+            description = photo.get("description", "").lower()
+            for theme in common_themes:
+                if theme in description:
+                    common_themes[theme] += 1
+        
+        # Find themes that appear in at least 30% of photos
+        threshold = total_photos * 0.3
+        dominant_themes = [theme for theme, count in common_themes.items() 
+                           if count >= threshold]
+        
+        if dominant_themes:
+            return f"Theme: {', '.join(dominant_themes)}"
+        
+        return None
+    
+    def _prepare_batch_summary_prompt(
+        self, 
+        batch_photos: List[Dict[str, Any]],
+        batch_theme: Optional[str] = None
+    ) -> List[Dict[str, str]]:
         """Prepare the prompt for batch summarization.
         
         Args:
             batch_photos: List of photo objects with metadata
+            batch_theme: Detected theme of the batch, if any
             
         Returns:
             List of message objects for the API call
@@ -189,12 +267,17 @@ class NarrativeSummarizer:
         
         photos_text = "\n".join(photo_descriptions)
         
+        # Create theme context if available
+        theme_context = ""
+        if batch_theme:
+            theme_context = f"\nThese photos appear to be related by: {batch_theme}."
+        
         # Create the messages array
         messages = [
             {"role": "system", "content": """You are an AI expert at analyzing photo collections and creating meaningful summaries.
              Given a set of photos with captions and metadata, create a cohesive summary that captures the key themes,
              people, and locations."""},
-            {"role": "user", "content": f"""Analyze the following set of photos and create a JSON summary:
+            {"role": "user", "content": f"""Analyze the following set of photos and create a JSON summary:{theme_context}
 
              {photos_text}
              
@@ -224,6 +307,11 @@ class NarrativeSummarizer:
         
         for i, summary in enumerate(batch_summaries):
             summary_text = f"Batch {i+1} Summary:\n"
+            
+            # Add detected theme if available
+            if "detected_theme" in summary:
+                summary_text += f"Theme: {summary['detected_theme']}\n"
+                
             summary_text += f"Summary: {summary.get('summary', '')}\n"
             
             if "topics" in summary and summary["topics"]:
@@ -237,6 +325,10 @@ class NarrativeSummarizer:
                 
             if "meta_summary" in summary and summary["meta_summary"]:
                 summary_text += f"Meta-Summary: {summary['meta_summary']}\n"
+                
+            if "date_range" in summary:
+                date_range = summary["date_range"]
+                summary_text += f"Date Range: {date_range.get('start', '')} to {date_range.get('end', '')}\n"
                 
             summaries_text.append(summary_text)
         
