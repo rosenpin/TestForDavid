@@ -9,6 +9,7 @@ from PIL import Image
 from .exif_processor import ExifProcessor
 from .face_processor import FaceProcessor
 from .description_generator import DescriptionGenerator
+from .clip_processor import ClipProcessor
 
 # Include file utility functions directly
 def ensure_directory(directory_path: str) -> None:
@@ -68,6 +69,7 @@ class PhotoProcessor:
         self.exif_processor = ExifProcessor()
         self.face_processor = FaceProcessor(self.faces_dir, self.metadata_dir)
         self.description_generator = DescriptionGenerator()
+        self.clip_processor = ClipProcessor()
     
     async def process_photo(self, photo_path: str) -> Dict[str, Any]:
         """Process a single photo, extracting metadata, detecting faces, and generating description."""
@@ -108,6 +110,9 @@ class PhotoProcessor:
             # Generate description using OpenAI
             description = await self.description_generator.generate_description(destination_path)
             
+            # Generate CLIP embeddings
+            clip_data = self.clip_processor.process_image(destination_path)
+            
             # Apply reverse geocoding if we have GPS coordinates
             if exif_data.get("location"):
                 try:
@@ -142,7 +147,8 @@ class PhotoProcessor:
                 "exif": ensure_serializable(exif_data.get("exif", {})),
                 "faces": faces_data,
                 "people": [],  # Will be filled during face clustering
-                "narratives": []
+                "narratives": [],
+                "clip_data": clip_data  # Add CLIP embeddings to metadata
             }
             
             # Save metadata
@@ -180,7 +186,8 @@ class PhotoProcessor:
             "exif": ensure_serializable(exif_data.get("exif", {})),
             "faces": [],
             "people": [],
-            "narratives": []
+            "narratives": [],
+            "clip_data": None  # Add CLIP embeddings to metadata
         }
     
     async def process_directory(self, directory_path: str, status_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:

@@ -13,6 +13,9 @@ import random
 
 from processors import PhotoProcessor
 from narrative_generator import InnerNarrativeGenerator
+from processors.photo_processor import PhotoProcessor
+from processors.narrative_generator import NarrativeGenerator
+from processors.update_clip_embeddings import update_photos_with_clip_embeddings
 
 # Constants for directory paths
 BASE_DIR = "."
@@ -317,6 +320,56 @@ async def get_person(person_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving person data: {str(e)}")
+
+@app.post("/api/update-clip-embeddings")
+async def update_clip_embeddings(background_tasks: BackgroundTasks):
+    """Update existing photo metadata with CLIP embeddings."""
+    global processing_status
+    
+    # Check if already processing
+    if processing_status.get("is_processing", False):
+        raise HTTPException(status_code=400, 
+                          detail=f"Already processing: {processing_status.get('current_stage', 'unknown')}")
+    
+    try:
+        # Update status
+        processing_status["is_processing"] = True
+        processing_status["current_stage"] = "preparing_clip_update"
+        processing_status["processed_photos"] = 0
+        processing_status["total_photos"] = 0
+        processing_status["error"] = None
+        
+        # Start background task
+        background_tasks.add_task(update_clip_embeddings_task)
+        
+        return {"message": "Started updating photos with CLIP embeddings"}
+    
+    except Exception as e:
+        processing_status["is_processing"] = False
+        processing_status["error"] = str(e)
+        raise HTTPException(status_code=500, detail=f"Error updating CLIP embeddings: {str(e)}")
+
+async def update_clip_embeddings_task():
+    """Background task to update photos with CLIP embeddings."""
+    global processing_status
+    
+    try:
+        # Update status callback function
+        def update_status(**kwargs):
+            for key, value in kwargs.items():
+                processing_status[key] = value
+        
+        # Update CLIP embeddings
+        await update_photos_with_clip_embeddings(DATA_DIR, update_status)
+        
+        # Mark as complete
+        processing_status["is_processing"] = False
+        processing_status["current_stage"] = "complete"
+    
+    except Exception as e:
+        processing_status["is_processing"] = False
+        processing_status["error"] = str(e)
+        print(f"Error in background CLIP embedding update: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
