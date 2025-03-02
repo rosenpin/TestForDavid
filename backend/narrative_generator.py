@@ -168,62 +168,89 @@ class NarrativeGenerator:
             await save_debug_info("narrative_result", narrative_result, os.path.join(self.data_dir, "debug_output"))
             
             # Format the narratives for the expected output format
-            narratives = []
+            output_narratives = []
             
-            if "batch_summaries" in narrative_result:
-                # Build from batch summaries and themes
-                narrative_themes = narrative_result.get("themes", [])
-                narrative_title = narrative_result.get("title", "Photo Collection")
+            # Handle new list-based return format from the modular generator
+            # Each item in the list is a separate themed narrative
+            for narrative_index, narrative_obj in enumerate(narrative_result):
+                # Extract batch summaries if available
+                batch_summaries = narrative_obj.get("batch_summaries", [])
                 
-                # Create a narrative for each theme or batch summary
+                # Get narrative details
+                narrative_themes = narrative_obj.get("themes", [])
+                narrative_title = narrative_obj.get("title", f"Photo Collection {narrative_index+1}")
+                narrative_text = narrative_obj.get("narrative", "A collection of photos.")
+                photo_ids = narrative_obj.get("photo_ids", [])
+                
+                # If we have explicit photo IDs in the narrative, use those
+                if photo_ids:
+                    output_narratives.append({
+                        "id": str(narrative_index + 1),
+                        "title": narrative_title,
+                        "description": narrative_text,
+                        "photo_ids": photo_ids,
+                        "selected_photo_ids": self.select_photos_for_display(photo_ids)
+                    })
+                    continue
+                
+                # If we have themes, use them to find related photos
                 if narrative_themes:
-                    # Use themes as narratives
-                    for i, theme in enumerate(narrative_themes):
-                        # Find related photos based on keywords
-                        related_photos = self._find_related_photos(
-                            theme, 
-                            narrative_result.get("batch_summaries", []),
-                            photos_for_generator
-                        )
-                        
-                        narratives.append({
-                            "id": str(i + 1),
-                            "title": theme,
-                            "description": narrative_result.get("narrative", "A collection of photos."),
-                            "photo_ids": related_photos,
-                            "selected_photo_ids": self.select_photos_for_display(related_photos)
-                        })
-                else:
-                    # Create one narrative per batch summary
-                    for i, batch in enumerate(narrative_result.get("batch_summaries", [])):
-                        batch_photos = []
+                    # Find photos related to the first theme
+                    theme = narrative_themes[0] if narrative_themes else narrative_title
+                    related_photos = self._find_related_photos(
+                        theme, 
+                        batch_summaries,
+                        photos_for_generator
+                    )
+                    
+                    output_narratives.append({
+                        "id": str(narrative_index + 1),
+                        "title": narrative_title,
+                        "description": narrative_text,
+                        "photo_ids": related_photos,
+                        "selected_photo_ids": self.select_photos_for_display(related_photos)
+                    })
+                # If we have batch summaries but no themes, create a narrative from them
+                elif batch_summaries:
+                    # Get all photo IDs across all batch summaries
+                    all_batch_photos = []
+                    for batch in batch_summaries:
                         for photo in photos_for_generator:
-                            # Get photo IDs from this batch
+                            # Get photo IDs from this batch using keywords
                             if any(keyword in (photo.get("caption", "") + " " + 
                                               photo.get("location", "")).lower() 
                                   for keyword in batch.get("keywords", [])):
-                                batch_photos.append(photo["id"])
-                        
-                        # If no photos found, use a subset of all photos
-                        if not batch_photos:
-                            batch_photos = [p["id"] for p in 
-                                           random.sample(photos_for_generator, 
-                                                        min(50, len(photos_for_generator)))]
-                        
-                        narratives.append({
-                            "id": str(i + 1),
-                            "title": batch.get("meta_summary", f"Batch {i+1}"),
-                            "description": batch.get("summary", "A collection of photos."),
-                            "photo_ids": batch_photos,
-                            "selected_photo_ids": self.select_photos_for_display(batch_photos)
-                        })
-            else:
-                # Just create a single narrative with all photos
+                                all_batch_photos.append(photo["id"])
+                    
+                    # If no photos found, use all photos
+                    if not all_batch_photos:
+                        all_batch_photos = [p["id"] for p in photos_for_generator]
+                    
+                    output_narratives.append({
+                        "id": str(narrative_index + 1),
+                        "title": narrative_title,
+                        "description": narrative_text,
+                        "photo_ids": all_batch_photos,
+                        "selected_photo_ids": self.select_photos_for_display(all_batch_photos)
+                    })
+                # Fallback: just create a narrative with all photos
+                else:
+                    photo_ids = [photo["id"] for photo in photos_for_generator]
+                    output_narratives.append({
+                        "id": str(narrative_index + 1),
+                        "title": narrative_title,
+                        "description": narrative_text,
+                        "photo_ids": photo_ids,
+                        "selected_photo_ids": self.select_photos_for_display(photo_ids)
+                    })
+            
+            # If no narratives were created, create a default one with all photos
+            if not output_narratives:
                 photo_ids = [photo["id"] for photo in photos_for_generator]
-                narratives.append({
+                output_narratives.append({
                     "id": "1",
-                    "title": narrative_result.get("title", "Photo Collection"),
-                    "description": narrative_result.get("narrative", "A collection of photos."),
+                    "title": "Photo Collection",
+                    "description": "A collection of photos.",
                     "photo_ids": photo_ids,
                     "selected_photo_ids": self.select_photos_for_display(photo_ids)
                 })
@@ -231,10 +258,10 @@ class NarrativeGenerator:
             # Save the narratives to file
             narratives_path = os.path.join(self.metadata_dir, "narratives.json")
             with open(narratives_path, "w") as f:
-                json.dump(narratives, f, indent=2)
+                json.dump(output_narratives, f, indent=2)
             
             # Update photo metadata with narrative assignments
-            for narrative in narratives:
+            for narrative in output_narratives:
                 for photo_id in narrative["photo_ids"]:
                     photo_path = os.path.join(self.photos_metadata_dir, f"{photo_id}.json")
                     if os.path.exists(photo_path):
@@ -255,7 +282,7 @@ class NarrativeGenerator:
             if status_callback:
                 status_callback(current_stage="complete")
             
-            return narratives
+            return output_narratives
         
         except Exception as e:
             logger.error(f"Error generating narratives: {str(e)}")

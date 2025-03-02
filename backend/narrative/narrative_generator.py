@@ -6,6 +6,7 @@ import time
 import json
 from datetime import datetime
 from openai import AsyncOpenAI
+from collections import defaultdict
 
 from .openai_client import OpenAIClient
 from .batch_processor import BatchProcessor
@@ -58,15 +59,15 @@ class NarrativeGenerator:
         self, 
         photos: List[Dict[str, Any]],
         collection_metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Generate narratives for a collection of photos.
+    ) -> List[Dict[str, Any]]:
+        """Generate multiple themed narratives for a collection of photos.
         
         Args:
             photos: List of photo objects with metadata
             collection_metadata: Additional metadata for the collection
             
         Returns:
-            Dictionary with generated narratives and metadata
+            List of dictionaries, each containing a themed narrative
         """
         start_time = time.time()
         logger.info(f"Starting narrative generation for {len(photos)} photos")
@@ -86,49 +87,332 @@ class NarrativeGenerator:
             # If there are no batches, return early
             if not batch_summaries:
                 logger.warning("No batch summaries generated, returning empty result")
-                return self._create_empty_result()
+                return [self._create_empty_result()]
             
-            # Consolidate batch summaries into a narrative
-            narrative = await self.summarizer.consolidate_summaries(
-                batch_summaries,
-                model=self.model
-            )
+            # Group summaries by theme instead of consolidating everything
+            themed_summary_groups = await self._group_summaries_by_theme(batch_summaries)
             
-            # Enrich the narrative with additional information
-            enriched_narrative = self._enrich_narrative(
-                narrative, 
-                batch_summaries, 
-                collection_metadata
-            )
-            
-            # Save debug info if enabled
-            if self.debug_mode:
-                await save_debug_info("final_narrative", enriched_narrative, "debug_output")
+            # Generate a separate narrative for each theme group
+            narratives = []
+            for theme, theme_summaries in themed_summary_groups.items():
+                try:
+                    # If there are multiple summaries in this theme, do a mini-consolidation
+                    if len(theme_summaries) > 1:
+                        narrative = await self.summarizer.consolidate_summaries(
+                            theme_summaries,
+                            model=self.model
+                        )
+                    else:
+                        # If there's only one summary, convert it directly to a narrative
+                        narrative = self._convert_summary_to_narrative(theme_summaries[0])
+                    
+                    # Enrich the narrative with additional information
+                    enriched_narrative = self._enrich_narrative(
+                        narrative, 
+                        theme_summaries, 
+                        collection_metadata,
+                        theme
+                    )
+                    
+                    # Save debug info if enabled
+                    if self.debug_mode:
+                        await save_debug_info(f"narrative_{theme}", enriched_narrative, "debug_output")
+                    
+                    narratives.append(enriched_narrative)
+                except Exception as e:
+                    logger.error(f"Error generating narrative for theme '{theme}': {str(e)}")
+                    narratives.append(self._create_error_result(f"Error generating narrative for theme '{theme}': {str(e)}"))
             
             # Calculate duration
             duration = time.time() - start_time
-            logger.info(f"Narrative generation completed in {duration:.2f} seconds")
+            logger.info(f"Generated {len(narratives)} themed narratives in {duration:.2f} seconds")
             
-            enriched_narrative["metadata"] = {
-                "photo_count": len(photos),
-                "batch_count": len(batch_summaries),
-                "process_time_seconds": duration,
-                "model": self.model,
-                "generated_at": datetime.now().isoformat()
-            }
+            # Add metadata to each narrative
+            for narrative in narratives:
+                if "metadata" not in narrative:
+                    narrative["metadata"] = {}
+                
+                narrative["metadata"].update({
+                    "photo_count": len(photos),
+                    "batch_count": len(batch_summaries),
+                    "narrative_count": len(narratives),
+                    "process_time_seconds": duration,
+                    "model": self.model,
+                    "generated_at": datetime.now().isoformat()
+                })
             
-            return enriched_narrative
+            return narratives
             
         except Exception as e:
             logger.error(f"Error in narrative generation: {str(e)}")
             # Return a basic structure in case of error
-            return self._create_error_result(str(e))
+            return [self._create_error_result(str(e))]
+    
+    async def _group_summaries_by_theme(
+        self, 
+        batch_summaries: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Group batch summaries by theme.
+        
+        Args:
+            batch_summaries: List of batch summaries
+            
+        Returns:
+            Dictionary mapping theme names to lists of related summaries
+        """
+        # Initial grouping based on detected themes
+        theme_groups = defaultdict(list)
+        
+        # First, group by explicit detected themes
+        for summary in batch_summaries:
+            theme = None
+            
+            # Try to get theme from detected_theme field
+            if "detected_theme" in summary:
+                theme = summary["detected_theme"]
+            
+            # If no theme detected, derive one from the summary
+            if not theme:
+                theme = self._derive_theme_from_summary(summary)
+            
+            # Default theme if still none
+            if not theme:
+                theme = "Miscellaneous"
+                
+            theme_groups[theme].append(summary)
+        
+        # Now merge very similar themes to avoid fragmentation
+        merged_groups = await self._merge_similar_theme_groups(theme_groups)
+        
+        # Log the themes we found
+        logger.info(f"Grouped batch summaries into {len(merged_groups)} themes: {', '.join(merged_groups.keys())}")
+        
+        return merged_groups
+    
+    def _derive_theme_from_summary(self, summary: Dict[str, Any]) -> str:
+        """Derive a theme from a summary if no explicit theme is available.
+        
+        Args:
+            summary: Batch summary
+            
+        Returns:
+            Derived theme name
+        """
+        # Try to get primary topic from topics field
+        if "topics" in summary and summary["topics"]:
+            return f"Theme: {summary['topics'][0]}"
+        
+        # Try to get primary location
+        if "locations" in summary and summary["locations"]:
+            return f"Location: {summary['locations'][0]}"
+        
+        # Try to use meta-summary
+        if "meta_summary" in summary and summary["meta_summary"]:
+            # Extract key phrases from meta-summary
+            words = summary["meta_summary"].lower().split()
+            for keyword in ["vacation", "trip", "wedding", "party", "family", "beach", "nature", "city"]:
+                if keyword in words:
+                    return f"Theme: {keyword.capitalize()}"
+        
+        # Default theme based on date if available
+        if "date_range" in summary:
+            date_range = summary["date_range"]
+            if "formatted_start" in date_range:
+                return f"Period: {date_range['formatted_start']}"
+            elif "start" in date_range:
+                return f"Period: {date_range['start']}"
+        
+        # Fallback to batch number
+        return f"Group {summary.get('batch_number', 'unknown')}"
+    
+    async def _merge_similar_theme_groups(
+        self, 
+        theme_groups: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Merge very similar theme groups to avoid fragmentation.
+        
+        Args:
+            theme_groups: Dictionary mapping theme names to lists of summaries
+            
+        Returns:
+            Dictionary with merged theme groups
+        """
+        # If we have only a few groups, don't bother merging
+        if len(theme_groups) <= 3:
+            return theme_groups
+        
+        # Use a lightweight model to identify similar themes
+        try:
+            # Prepare the theme data for the model
+            theme_data = []
+            for theme, summaries in theme_groups.items():
+                # Collect key information from all summaries in this theme
+                all_topics = []
+                all_locations = []
+                for summary in summaries:
+                    if "topics" in summary:
+                        all_topics.extend(summary.get("topics", []))
+                    if "locations" in summary:
+                        all_locations.extend(summary.get("locations", []))
+                
+                # Create a theme descriptor
+                theme_data.append({
+                    "theme": theme,
+                    "topics": list(set(all_topics)),
+                    "locations": list(set(all_locations)),
+                    "count": len(summaries)
+                })
+            
+            # Request theme merging from the model
+            messages = [
+                {"role": "system", "content": "You are an expert at analyzing and organizing photo collection themes."},
+                {"role": "user", "content": f"""Given these theme groups from a photo collection, suggest which ones should be merged together to avoid too many tiny narrative groups.
+                 Each theme should represent a cohesive story that users would expect to see together.
+                 
+                 Theme groups:
+                 {json.dumps(theme_data, indent=2)}
+                 
+                 Respond with a JSON array where each element describes which themes should be merged:
+                 [
+                     {{"merged_name": "New Theme Name", "themes_to_merge": ["Theme1", "Theme2"]}},
+                     {{"merged_name": "Another Theme", "themes_to_merge": ["Theme3", "Theme4", "Theme5"]}}
+                 ]
+                 
+                 Themes that shouldn't be merged should not be included in the response.
+                 Don't merge themes that have completely different topics or locations.
+                 Try to keep the final number of themes between 3-7 if possible.
+                 """}
+            ]
+            
+            # Use a lightweight model for this task
+            lightweight_model = "gpt-4o-mini" if self.model != "gpt-4o-mini" else "gpt-3.5-turbo"
+            
+            # Make the API call
+            response = await self.client.call_with_retry(
+                model=lightweight_model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                max_completion_tokens=1000
+            )
+            
+            # Process the response
+            merge_text = response.choices[0].message.content
+            try:
+                merge_data = json.loads(merge_text)
+                
+                # Apply the merges
+                merged_groups = defaultdict(list)
+                
+                # Track which themes have been merged
+                merged_themes = set()
+                
+                # First, process all the merges
+                for merge_item in merge_data:
+                    merged_name = merge_item.get("merged_name")
+                    themes_to_merge = merge_item.get("themes_to_merge", [])
+                    
+                    if not merged_name or not themes_to_merge:
+                        continue
+                    
+                    # Merge the specified themes
+                    for theme in themes_to_merge:
+                        if theme in theme_groups:
+                            merged_groups[merged_name].extend(theme_groups[theme])
+                            merged_themes.add(theme)
+                
+                # Now add any themes that weren't merged
+                for theme, summaries in theme_groups.items():
+                    if theme not in merged_themes:
+                        merged_groups[theme] = summaries
+                
+                return dict(merged_groups)
+                
+            except (json.JSONDecodeError, TypeError, KeyError) as e:
+                logger.error(f"Error processing theme merge response: {e}")
+                return theme_groups
+                
+        except Exception as e:
+            logger.error(f"Error in theme merging: {e}")
+            # If theme merging fails, return the original groups
+            return theme_groups
+    
+    def _convert_summary_to_narrative(self, summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a single batch summary to a narrative structure.
+        
+        Args:
+            summary: Batch summary
+            
+        Returns:
+            Narrative dictionary
+        """
+        # Extract the main elements from the summary
+        narrative_text = summary.get("summary", "No narrative available.")
+        
+        # Create a basic narrative structure
+        narrative = {
+            "title": self._generate_title_from_summary(summary),
+            "narrative": narrative_text,
+            "themes": summary.get("topics", []),
+            "timeline": []
+        }
+        
+        # Add a basic timeline if we have date information
+        if "date_range" in summary:
+            date_range = summary["date_range"]
+            narrative["timeline"] = [
+                {
+                    "period": f"{date_range.get('start', '')} to {date_range.get('end', '')}",
+                    "events": [narrative_text]
+                }
+            ]
+        
+        return narrative
+    
+    def _generate_title_from_summary(self, summary: Dict[str, Any]) -> str:
+        """Generate a title from a summary.
+        
+        Args:
+            summary: Batch summary
+            
+        Returns:
+            Generated title
+        """
+        # If we have a meta-summary, use it as a basis for the title
+        if "meta_summary" in summary and summary["meta_summary"]:
+            meta_summary = summary["meta_summary"]
+            # Convert to title case and limit length
+            title_words = meta_summary.split()[:8]  # Limit to 8 words
+            return " ".join(title_words).title()
+        
+        # Try to create a title from location and topic
+        location = ""
+        topic = ""
+        
+        if "locations" in summary and summary["locations"]:
+            location = summary["locations"][0]
+            
+        if "topics" in summary and summary["topics"]:
+            topic = summary["topics"][0]
+            
+        if location and topic:
+            return f"{topic.title()} in {location}"
+        elif location:
+            return f"Exploring {location}"
+        elif topic:
+            return f"{topic.title()} Memories"
+        
+        # Default title if nothing else works
+        if "batch_number" in summary:
+            return f"Photo Collection - Group {summary['batch_number']}"
+        else:
+            return "Photo Collection"
     
     def _enrich_narrative(
         self, 
         narrative: Dict[str, Any],
         batch_summaries: List[Dict[str, Any]],
-        collection_metadata: Optional[Dict[str, Any]] = None
+        collection_metadata: Optional[Dict[str, Any]] = None,
+        theme: Optional[str] = None
     ) -> Dict[str, Any]:
         """Enrich the narrative with additional information.
         
@@ -136,11 +420,16 @@ class NarrativeGenerator:
             narrative: Consolidated narrative
             batch_summaries: List of batch summaries
             collection_metadata: Additional metadata for the collection
+            theme: Theme of this narrative
             
         Returns:
             Enriched narrative
         """
         enriched = narrative.copy()
+        
+        # Add the theme
+        if theme:
+            enriched["theme"] = theme
         
         # Add collection metadata if provided
         if collection_metadata:
@@ -171,6 +460,16 @@ class NarrativeGenerator:
         
         # Add batch summaries for reference
         enriched["batch_summaries"] = batch_summaries
+        
+        # Add photo IDs from all batches
+        photo_ids = []
+        for summary in batch_summaries:
+            for photo in summary.get("photos", []):
+                if "id" in photo:
+                    photo_ids.append(photo["id"])
+        
+        if photo_ids:
+            enriched["photo_ids"] = photo_ids
         
         return enriched
     

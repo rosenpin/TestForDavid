@@ -293,7 +293,10 @@ class NarrativeSummarizer:
         
         return messages
     
-    def _prepare_consolidation_prompt(self, batch_summaries: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    def _prepare_consolidation_prompt(
+        self, 
+        batch_summaries: List[Dict[str, Any]]
+    ) -> List[Dict[str, str]]:
         """Prepare the prompt for consolidating batch summaries.
         
         Args:
@@ -304,6 +307,24 @@ class NarrativeSummarizer:
         """
         # Format the batch summaries
         summaries_text = []
+        
+        # Extract the main theme if available from the first summary
+        theme = None
+        for summary in batch_summaries:
+            if "detected_theme" in summary:
+                theme = summary["detected_theme"]
+                break
+        
+        theme_instruction = ""
+        if theme:
+            # Extract the theme category and value
+            theme_parts = theme.split(": ", 1)
+            if len(theme_parts) > 1:
+                theme_category = theme_parts[0].lower()
+                theme_value = theme_parts[1]
+                theme_instruction = f"These summaries all relate to the {theme_category} '{theme_value}'. "
+            else:
+                theme_instruction = f"These summaries all relate to {theme}. "
         
         for i, summary in enumerate(batch_summaries):
             summary_text = f"Batch {i+1} Summary:\n"
@@ -338,14 +359,17 @@ class NarrativeSummarizer:
         messages = [
             {"role": "system", "content": """You are an AI expert at creating cohesive narratives from collections of photos.
              Given summaries of multiple batches of photos, create a consolidated narrative that tells a story."""},
-            {"role": "user", "content": f"""Based on the following batch summaries, create a consolidated narrative:
+            {"role": "user", "content": f"""Based on the following batch summaries, create a focused, themed narrative:
 
+             {theme_instruction}Focus on creating a cohesive narrative that highlights the connections between these 
+             specific photos rather than attempting to create an all-encompassing story.
+             
              {all_summaries}
              
              Please provide a JSON response with the following structure:
              {{
-                 "title": "An evocative title for the entire collection",
-                 "narrative": "A cohesive narrative that tells the story of these photos",
+                 "title": "An evocative title for this themed collection",
+                 "narrative": "A cohesive narrative that tells the story of these specific photos",
                  "themes": ["theme1", "theme2"],
                  "timeline": [
                      {{ "period": "description of time period", "events": ["event1", "event2"] }}

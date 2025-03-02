@@ -131,6 +131,29 @@ class BatchProcessor:
             if date_range:
                 summary["date_range"] = date_range
             
+            # Keep track of photos in this batch (store minimal data)
+            photo_references = []
+            for photo in batch:
+                photo_ref = {
+                    "id": photo.get("id", ""),
+                    "filename": photo.get("filename", ""),
+                }
+                
+                # Include minimal metadata
+                if "location" in photo:
+                    photo_ref["location"] = photo.get("location")
+                
+                if "timestamp" in photo:
+                    photo_ref["timestamp"] = photo.get("timestamp")
+                
+                if "date" in photo:
+                    photo_ref["date"] = photo.get("date")
+                
+                photo_references.append(photo_ref)
+            
+            # Add photo references to the summary
+            summary["photos"] = photo_references
+            
             # Save debug info if enabled
             if self.debug_mode:
                 await save_debug_info(f"{batch_id}_summary", summary, "debug_output/summaries")
