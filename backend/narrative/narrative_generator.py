@@ -23,7 +23,7 @@ class NarrativeGenerator:
         self, 
         api_key: str,
         model: str = "o1",
-        batch_size: int = 25,
+        batch_size: int = 100,
         max_concurrent_batches: int = 5,
         debug_mode: bool = False
     ):

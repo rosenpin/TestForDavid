@@ -18,7 +18,7 @@ class BatchProcessor:
     def __init__(
         self, 
         summarizer: NarrativeSummarizer,
-        batch_size: int = 25,
+        batch_size: int = 100,
         debug_mode: bool = False
     ):
         """Initialize the batch processor.
