@@ -47,3 +47,4 @@ venv/
 .env
 backend/data
 test_photos/
+backend/debug_output/

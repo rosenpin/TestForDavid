@@ -201,36 +201,55 @@ class PhotoProcessor:
         if status_callback:
             status_callback(total_photos=total_photos, processed_photos=processed_photos, current_stage="analyzing")
         
-        # Process photos in batches
-        batch_size = 5
+        # Process photos in batches - use smaller batch size for better progress feedback
+        batch_size = 3  # Reduced from 5 to 3 for more frequent updates and better error handling
         all_metadata = []
+        
+        # Sort photos to process similar ones together
+        photo_paths.sort()
+        
+        print(f"Processing {total_photos} photos in batches of {batch_size}")
         
         for i in range(0, len(photo_paths), batch_size):
             batch = photo_paths[i:i+batch_size]
             tasks = [self.process_photo(photo_path) for photo_path in batch]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            for result in batch_results:
-                if not isinstance(result, Exception):
-                    all_metadata.append(result)
-            
-            processed_photos += len(batch)
-            if status_callback:
-                status_callback(processed_photos=processed_photos)
+            try:
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for j, result in enumerate(batch_results):
+                    if isinstance(result, Exception):
+                        print(f"Error processing photo {batch[j]}: {str(result)}")
+                    else:
+                        all_metadata.append(result)
+                
+                processed_photos += len(batch)
+                if status_callback:
+                    status_callback(processed_photos=processed_photos)
+                
+                print(f"Processed {processed_photos}/{total_photos} photos")
+                
+            except Exception as e:
+                print(f"Batch processing error at photos {i+1}-{min(i+batch_size, total_photos)}: {str(e)}")
         
         # After processing all photos, perform face clustering if we have detected faces and clustering is enabled
         if self.enable_clustering and self.face_processor.face_embeddings:
             if status_callback:
                 status_callback(current_stage="clustering_faces")
             
-            person_clusters = await self.face_processor.cluster_faces()
-            person_stats = await self.face_processor.update_photos_with_person_ids(person_clusters, self.photos_metadata_dir)
-            
-            # Log clustering results
-            print(f"Face clustering complete. Identified {len(person_clusters)} unique individuals.")
-            if person_stats:
-                print("Person statistics:", json.dumps({k: {"face_count": v["face_count"], "photo_count": v["photo_count"]} 
-                                                    for k, v in person_stats.items()}, indent=2))
+            try:
+                person_clusters = await self.face_processor.cluster_faces()
+                person_stats = await self.face_processor.update_photos_with_person_ids(person_clusters, self.photos_metadata_dir)
+                
+                # Log clustering results
+                print(f"Face clustering complete. Identified {len(person_clusters)} unique individuals.")
+                if person_stats:
+                    print("Person statistics:", json.dumps({k: {"face_count": v["face_count"], "photo_count": v["photo_count"]} 
+                                                        for k, v in person_stats.items()}, indent=2))
+            except Exception as e:
+                print(f"Error during face clustering: {str(e)}")
+                print("Continuing without face clustering")
+                
         elif not self.enable_clustering and self.face_processor.face_embeddings:
             print("Face clustering disabled. Skipping clustering step for faster processing.")
         

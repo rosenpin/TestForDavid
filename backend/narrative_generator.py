@@ -1,19 +1,40 @@
+"""Narrative generator for photo collections.
+
+This is the main entry point for the narrative generation functionality.
+It maintains the same interface as the original narrative_generator.py but
+uses a modular structure internally for better maintainability.
+"""
 import os
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Callable, Optional
 import uuid
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import datetime
+import asyncio
+import random
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import our modular components
+from narrative.narrative_generator import NarrativeGenerator as ModularNarrativeGenerator
+from narrative.utils import save_debug_info
 
 # Load environment variables
 load_dotenv()
 
-# Configure OpenAI API
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 class NarrativeGenerator:
+    """Narrative generator for photo collections that maintains the original API."""
+    
     def __init__(self, data_dir: str = "data"):
+        """Initialize the narrative generator.
+        
+        Args:
+            data_dir: Data directory for storing photos and metadata
+        """
         self.data_dir = data_dir
         self.metadata_dir = os.path.join(data_dir, "metadata")
         self.photos_metadata_dir = os.path.join(self.metadata_dir, "photos")
@@ -21,62 +42,193 @@ class NarrativeGenerator:
         # Create necessary directories
         os.makedirs(self.metadata_dir, exist_ok=True)
         os.makedirs(self.photos_metadata_dir, exist_ok=True)
+        
+        # Get the OpenAI API key
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            logger.warning("OpenAI API key not found in environment variables")
+        
+        # Create the modular narrative generator
+        self.generator = ModularNarrativeGenerator(
+            api_key=self.api_key,
+            model="o1",
+            batch_size=25,
+            max_concurrent_batches=5,
+            debug_mode=True  # Enable debug mode for development
+        )
     
-    async def generate_narratives(self, status_callback=None) -> List[Dict[str, Any]]:
-        """Generate narratives from photo descriptions."""
+    async def generate_narratives(self, status_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:
+        """Generate narratives from photo descriptions.
+        
+        Args:
+            status_callback: Optional callback function for status updates
+            
+        Returns:
+            List of narrative objects
+        """
         try:
-            # Update status
+            # Update status if callback provided
             if status_callback:
                 status_callback(current_stage="generating_narratives")
             
-            # Load all photo metadata
-            photo_metadata = []
-            for filename in os.listdir(self.photos_metadata_dir):
-                if filename.endswith(".json"):
-                    with open(os.path.join(self.photos_metadata_dir, filename), "r") as f:
-                        metadata = json.load(f)
-                        photo_metadata.append(metadata)
+            # Load photo descriptions
+            descriptions = []
+            people_data = {}
             
-            # If we don't have enough photos, return empty narratives
-            if len(photo_metadata) < 5:
+            # Find all photo metadata files
+            photo_files = [f for f in os.listdir(self.photos_metadata_dir) if f.endswith(".json")]
+            logger.info(f"Found {len(photo_files)} photo metadata files")
+            
+            # Update status if callback provided
+            if status_callback:
+                status_callback(total_photos=len(photo_files))
+            
+            # Load each photo's metadata
+            for i, filename in enumerate(photo_files):
+                file_path = os.path.join(self.photos_metadata_dir, filename)
+                with open(file_path, "r") as f:
+                    photo_data = json.load(f)
+                
+                # Extract photo ID from filename
+                photo_id = os.path.splitext(filename)[0]
+                photo_data["id"] = photo_id
+                
+                # Add to descriptions
+                descriptions.append(photo_data)
+                
+                # Update people stats if face data exists
+                if "faces" in photo_data and photo_data["faces"]:
+                    for face in photo_data["faces"]:
+                        if "person_id" in face and face["person_id"]:
+                            person_id = face["person_id"]
+                            if person_id not in people_data:
+                                people_data[person_id] = {"photo_count": 0, "face_count": 0}
+                            
+                            people_data[person_id]["photo_count"] += 1
+                            people_data[person_id]["face_count"] += 1
+                
+                # Update status periodically if callback provided
+                if status_callback and i % 10 == 0:
+                    status_callback(processed_photos=i+1)
+            
+            # Update status if callback provided
+            if status_callback:
+                status_callback(processed_photos=len(photo_files))
+            
+            # For empty collections, return early
+            if not descriptions:
+                logger.warning("No photos found, returning empty narrative list")
                 return []
             
-            # Prepare descriptions for the LLM
-            descriptions = [
-                {
-                    "id": photo["id"],
-                    "description": photo["description"],
-                    "timestamp": photo["timestamp"],
-                    "location": photo.get("location", None),
-                    "date_taken": datetime.datetime.fromtimestamp(photo["timestamp"]).strftime("%Y-%m-%d %H:%M:%S") if photo.get("timestamp") else None,
-                    "location_name": self._format_location(photo.get("location", None)),
-                    "people": photo.get("people", [])
+            # Format the photo data for our modular generator
+            photos_for_generator = []
+            for photo in descriptions:
+                # Convert timestamp (float) to date string if needed
+                date_value = photo.get("date") or photo.get("timestamp", "")
+                formatted_date = ""
+                if isinstance(date_value, (int, float)):
+                    try:
+                        # Convert Unix timestamp to YYYY-MM-DD format
+                        formatted_date = datetime.datetime.fromtimestamp(date_value).strftime("%Y-%m-%d")
+                    except (ValueError, TypeError, OverflowError) as e:
+                        logger.warning(f"Failed to convert timestamp {date_value}: {e}")
+                elif isinstance(date_value, str):
+                    formatted_date = date_value
+                
+                formatted_photo = {
+                    "id": photo.get("id", ""),
+                    "caption": photo.get("description", "") or photo.get("caption", ""),
+                    "date": formatted_date,
+                    "location": photo.get("location", "") or photo.get("place", ""),
                 }
-                for photo in photo_metadata
-            ]
+                
+                # Add any people detected in the photo
+                if "faces" in photo and photo["faces"]:
+                    people = []
+                    for face in photo["faces"]:
+                        if "person_id" in face and face["person_id"]:
+                            people.append(face["person_id"])
+                    if people:
+                        formatted_photo["people"] = people
+                
+                photos_for_generator.append(formatted_photo)
             
-            # Sort by timestamp
-            descriptions.sort(key=lambda x: x["timestamp"])
+            # Create collection metadata
+            collection_metadata = {
+                "people_data": people_data
+            }
             
-            # Generate narratives using OpenAI
-            narratives = await self._generate_narratives_with_llm(descriptions)
+            # Generate narratives using our modular generator
+            narrative_result = await self.generator.generate_narratives(
+                photos_for_generator,
+                collection_metadata
+            )
             
-            # Ensure each narrative has selected_photo_ids
-            for narrative in narratives:
-                # If selected_photo_ids is missing or empty, select representative photos
-                if "selected_photo_ids" not in narrative or not narrative["selected_photo_ids"]:
-                    narrative["selected_photo_ids"] = await self.select_representative_photos(narrative, photo_metadata)
-                # Ensure all selected_photo_ids are valid (exist in photo_ids)
+            # Save debug info
+            await save_debug_info("narrative_result", narrative_result, os.path.join(self.data_dir, "debug_output"))
+            
+            # Format the narratives for the expected output format
+            narratives = []
+            
+            if "batch_summaries" in narrative_result:
+                # Build from batch summaries and themes
+                narrative_themes = narrative_result.get("themes", [])
+                narrative_title = narrative_result.get("title", "Photo Collection")
+                
+                # Create a narrative for each theme or batch summary
+                if narrative_themes:
+                    # Use themes as narratives
+                    for i, theme in enumerate(narrative_themes):
+                        # Find related photos based on keywords
+                        related_photos = self._find_related_photos(
+                            theme, 
+                            narrative_result.get("batch_summaries", []),
+                            photos_for_generator
+                        )
+                        
+                        narratives.append({
+                            "id": str(i + 1),
+                            "title": theme,
+                            "description": narrative_result.get("narrative", "A collection of photos."),
+                            "photo_ids": related_photos,
+                            "selected_photo_ids": related_photos[:min(10, len(related_photos))]
+                        })
                 else:
-                    narrative["selected_photo_ids"] = [
-                        photo_id for photo_id in narrative["selected_photo_ids"] 
-                        if photo_id in narrative["photo_ids"]
-                    ]
-                    # If we filtered out all selected photos, select new ones
-                    if not narrative["selected_photo_ids"]:
-                        narrative["selected_photo_ids"] = await self.select_representative_photos(narrative, photo_metadata)
+                    # Create one narrative per batch summary
+                    for i, batch in enumerate(narrative_result.get("batch_summaries", [])):
+                        batch_photos = []
+                        for photo in photos_for_generator:
+                            # Get photo IDs from this batch
+                            if any(keyword in (photo.get("caption", "") + " " + 
+                                              photo.get("location", "")).lower() 
+                                  for keyword in batch.get("keywords", [])):
+                                batch_photos.append(photo["id"])
+                        
+                        # If no photos found, use a subset of all photos
+                        if not batch_photos:
+                            batch_photos = [p["id"] for p in 
+                                           random.sample(photos_for_generator, 
+                                                        min(50, len(photos_for_generator)))]
+                        
+                        narratives.append({
+                            "id": str(i + 1),
+                            "title": batch.get("meta_summary", f"Batch {i+1}"),
+                            "description": batch.get("summary", "A collection of photos."),
+                            "photo_ids": batch_photos,
+                            "selected_photo_ids": batch_photos[:min(10, len(batch_photos))]
+                        })
+            else:
+                # Just create a single narrative with all photos
+                photo_ids = [photo["id"] for photo in photos_for_generator]
+                narratives.append({
+                    "id": "1",
+                    "title": narrative_result.get("title", "Photo Collection"),
+                    "description": narrative_result.get("narrative", "A collection of photos."),
+                    "photo_ids": photo_ids,
+                    "selected_photo_ids": photo_ids[:min(10, len(photo_ids))]
+                })
             
-            # Save narratives
+            # Save the narratives to file
             narratives_path = os.path.join(self.metadata_dir, "narratives.json")
             with open(narratives_path, "w") as f:
                 json.dump(narratives, f, indent=2)
@@ -106,270 +258,52 @@ class NarrativeGenerator:
             return narratives
         
         except Exception as e:
-            print(f"Error generating narratives: {str(e)}")
+            logger.error(f"Error generating narratives: {str(e)}")
             if status_callback:
                 status_callback(error=str(e))
             raise
     
-    def _format_location(self, location: Dict[str, Any]) -> str:
-        """Format location information into a readable string."""
-        if not location:
-            return ""
+    def _find_related_photos(
+        self, 
+        theme: str, 
+        batch_summaries: List[Dict[str, Any]],
+        photos: List[Dict[str, Any]]
+    ) -> List[str]:
+        """Find photos related to a theme.
         
-        # Use the pre-formatted location string if available
-        if location.get("formatted"):
-            return location["formatted"]
+        Args:
+            theme: Theme to find related photos for
+            batch_summaries: List of batch summaries
+            photos: List of photo objects
+            
+        Returns:
+            List of photo IDs related to the theme
+        """
+        related_photos = set()
+        theme_lower = theme.lower()
         
-        # Check if we have reverse geocoded information
-        if "city" in location and "country" in location:
-            if location["city"] and location["state"] and location["country"]:
-                return f"{location['city']}, {location['state']}, {location['country']}"
-            elif location["city"] and location["country"]:
-                return f"{location['city']}, {location['country']}"
-            elif location["country"]:
-                return location["country"]
+        # Look for photos with matching themes in batch summaries
+        for batch in batch_summaries:
+            if any(kw in theme_lower for kw in batch.get("keywords", [])) or \
+               theme_lower in batch.get("summary", "").lower():
+                # This batch is related to the theme
+                for photo in photos:
+                    photo_text = (photo.get("caption", "") + " " + 
+                                 photo.get("location", "")).lower()
+                    if any(kw in photo_text for kw in batch.get("keywords", [])):
+                        related_photos.add(photo["id"])
         
-        # Fallback to coordinates
-        if "latitude" in location and "longitude" in location:
-            return f"Coordinates: {location['latitude']:.6f}, {location['longitude']:.6f}"
+        # If we didn't find any photos, search directly in photo captions
+        if not related_photos:
+            for photo in photos:
+                photo_text = (photo.get("caption", "") + " " + 
+                             photo.get("location", "")).lower()
+                if theme_lower in photo_text:
+                    related_photos.add(photo["id"])
         
-        return ""
-    
-    async def _generate_narratives_with_llm(self, descriptions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Use OpenAI to generate narratives from photo descriptions."""
-        try:
-            # Get people information
-            people_data = self._collect_people_data(descriptions)
-            
-            # Prepare the prompt
-            descriptions_text = "\n".join([
-                f"Photo {i+1} (ID: {desc['id']}): {desc['description']}" + 
-                (f" | Location: {desc['location_name']}" if desc.get('location_name') else 
-                 (f" | Coordinates: {desc['location']['latitude']}, {desc['location']['longitude']}" if desc.get('location') else "")) +
-                (f" | Date Taken: {desc['date_taken']}" if desc.get('date_taken') else "") +
-                (f" | People: {', '.join(desc.get('people', []))}" if desc.get('people') else "")
-                for i, desc in enumerate(descriptions)
-            ])
-            
-            # Add people information to the prompt
-            people_text = ""
-            if people_data:
-                people_text = "\n\nPeople identified in photos:\n" + "\n".join([
-                    f"Person {person_id}: Appears in {stats['photo_count']} photos"
-                    for person_id, stats in people_data.items()
-                ])
-            
-            # Call OpenAI API using the client
-            response = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert at analyzing photo collections and identifying meaningful life narratives.
-                        Your task is to analyze photo descriptions and group them into coherent narratives or stories.
-                        
-                        IMPORTANT: You MUST respond with a valid JSON object containing an array of narrative objects.
-                        
-                        Each narrative MUST have these fields:
-                        - "id": A unique string identifier (can be a simple number like "1", "2", etc.)
-                        - "title": A short, engaging title (string)
-                        - "description": A 1-2 paragraph description (string)
-                        - "photo_ids": An array of string photo IDs that belong to this narrative
-                        - "selected_photo_ids": An array of string photo IDs that are most representative (a subset of photo_ids)
-                        
-                        Pay special attention to:
-                        1. Location data and timestamps when available
-                        2. People identified in photos (person_X IDs represent the same individual across photos)
-                        
-                        Consider creating people-focused narratives for individuals who appear frequently.
-                        
-                        Create between 3-7 distinct narratives, depending on the diversity of the photos.
-                        Each narrative should tell a meaningful story about the person's life, experiences, or interests.
-                        A photo can belong to multiple narratives if relevant.
-                        
-                        REMEMBER: Your response MUST be a valid JSON object with this exact structure:
-                        {
-                          "narratives": [
-                            {
-                              "id": "1",
-                              "title": "Narrative Title",
-                              "description": "Detailed description of the narrative",
-                              "photo_ids": ["photo-id-1", "photo-id-2", ...],
-                              "selected_photo_ids": ["photo-id-1", "photo-id-3", ...]
-                            },
-                            ...
-                          ]
-                        }"""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Here are descriptions of photos from someone's life. Analyze these descriptions and identify meaningful narratives or stories:
-
-{descriptions_text}{people_text}
-
-IMPORTANT: Your response MUST be a valid JSON object with the exact structure specified in the system instructions.
-"""
-                    }
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=16383
-            )
-            
-            # Parse the response
-            content = response.choices[0].message.content.strip()
-            narratives_data = json.loads(content)
-            
-            # Ensure we have the expected format
-            if "narratives" in narratives_data:
-                narratives = narratives_data["narratives"]
-            else:
-                narratives = narratives_data
-            
-            # Ensure each narrative has a unique ID
-            for narrative in narratives:
-                if "id" not in narrative or not narrative["id"]:
-                    narrative["id"] = str(uuid.uuid4())
-                
-                # Ensure photo_ids is present
-                if "photo_ids" not in narrative or not narrative["photo_ids"]:
-                    narrative["photo_ids"] = []
-                
-                # Ensure selected_photo_ids is present
-                if "selected_photo_ids" not in narrative:
-                    narrative["selected_photo_ids"] = []
-                
-                # Ensure all selected_photo_ids are in photo_ids
-                narrative["selected_photo_ids"] = [
-                    photo_id for photo_id in narrative["selected_photo_ids"] 
-                    if photo_id in narrative["photo_ids"]
-                ]
-            
-            return narratives
+        # If still empty, get a random selection
+        if not related_photos:
+            sample_size = min(50, len(photos))
+            related_photos = set(p["id"] for p in random.sample(photos, sample_size))
         
-        except Exception as e:
-            print(f"Error generating narratives with LLM: {str(e)}")
-            # Return a simple fallback narrative if there's an error
-            return [{
-                "id": str(uuid.uuid4()),
-                "title": "Photo Collection",
-                "description": "A collection of photos from various moments in life.",
-                "photo_ids": [desc["id"] for desc in descriptions],
-                "selected_photo_ids": [desc["id"] for desc in descriptions[:min(10, len(descriptions))]]
-            }]
-    
-    async def select_representative_photos(self, narrative: Dict[str, Any], photo_metadata: List[Dict[str, Any]]) -> List[str]:
-        """Select the most representative photos for a narrative."""
-        # Filter photos that belong to this narrative
-        narrative_photos = [photo for photo in photo_metadata if photo["id"] in narrative["photo_ids"]]
-        
-        # If we have 10 or fewer photos, use all of them
-        if len(narrative_photos) <= 10:
-            return [photo["id"] for photo in narrative_photos]
-        
-        # Otherwise, use OpenAI to select the most representative ones
-        try:
-            # Prepare the prompt
-            photos_text = "\n".join([
-                f"Photo {i+1} (ID: {photo['id']}): {photo['description']}" + 
-                (f" | Location: {self._format_location(photo.get('location'))}" if photo.get('location') else "") +
-                (f" | Date Taken: {datetime.datetime.fromtimestamp(photo['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}" if photo.get('timestamp') else "")
-                for i, photo in enumerate(narrative_photos)
-            ])
-            
-            # Call OpenAI API using the client
-            response = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert curator who selects the most representative and engaging photos for a narrative.
-                        Your task is to select a subset of photos that best tell the story of a narrative.
-                        
-                        IMPORTANT: You MUST respond with a valid JSON object containing an array of photo IDs.
-                        
-                        The response format MUST be:
-                        {
-                          "selected_photo_ids": ["photo-id-1", "photo-id-2", ...]
-                        }
-                        
-                        Choose photos that are diverse, visually interesting, and capture key moments or elements of the narrative.
-                        
-                        Consider location and time data when making your selection:
-                        - Include photos from different locations if the narrative spans multiple places
-                        - Select photos that show progression over time if relevant
-                        - Prioritize photos with both location and time data when available
-                        
-                        Avoid selecting very similar photos or ones that don't add new information to the narrative.
-                        
-                        REMEMBER: Your response MUST be a valid JSON object with the exact structure shown above."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Here is a narrative titled "{narrative['title']}" with the following description:
-{narrative['description']}
-
-And here are all the photos that belong to this narrative:
-{photos_text}
-
-Select the 5-10 most representative photos that best tell this narrative.
-
-IMPORTANT: Your response MUST be a valid JSON object with the exact structure specified in the system instructions.
-"""
-                    }
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=2000
-            )
-            
-            # Parse the response
-            content = response.choices[0].message.content.strip()
-            selected_photos_data = json.loads(content)
-            
-            # Ensure we have the expected format
-            if "selected_photo_ids" in selected_photos_data:
-                selected_photos = selected_photos_data["selected_photo_ids"]
-            else:
-                selected_photos = selected_photos_data
-            
-            # Validate that all selected photos are in the narrative
-            valid_selected_photos = [photo_id for photo_id in selected_photos if photo_id in narrative["photo_ids"]]
-            
-            # If we don't have any valid selected photos, use a subset of the narrative photos
-            if not valid_selected_photos:
-                import random
-                valid_selected_photos = random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"])))
-            
-            return valid_selected_photos
-        
-        except Exception as e:
-            print(f"Error selecting representative photos: {str(e)}")
-            # Fallback: select a random subset
-            import random
-            return random.sample(narrative["photo_ids"], min(10, len(narrative["photo_ids"])))
-    
-    def _collect_people_data(self, descriptions: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
-        """Collect statistics about people appearing in photos."""
-        people_stats = {}
-        
-        # Gather all photos by person
-        for desc in descriptions:
-            if "people" in desc and desc["people"]:
-                for person_id in desc["people"]:
-                    if person_id not in people_stats:
-                        people_stats[person_id] = {"photo_count": 0, "photos": []}
-                    
-                    people_stats[person_id]["photo_count"] += 1
-                    people_stats[person_id]["photos"].append(desc["id"])
-        
-        # Filter out people who appear in fewer than 3 photos
-        filtered_stats = {
-            person_id: stats 
-            for person_id, stats in people_stats.items() 
-            if stats["photo_count"] >= 3
-        }
-        
-        # Remove the photos list from the output to keep it clean
-        for person_id in filtered_stats:
-            del filtered_stats[person_id]["photos"]
-        
-        return filtered_stats 
+        return list(related_photos) 
