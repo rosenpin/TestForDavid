@@ -14,6 +14,7 @@ import datetime
 import asyncio
 import random
 import logging
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -344,8 +345,8 @@ class InnerNarrativeGenerator:
     def select_photos_for_display(self, photo_ids: List[str], max_photos: Optional[int] = None) -> List[str]:
         """Select photos to display in the narrative.
         
-        This function can be used to intelligently select a subset of photos for display.
-        For now, it simply returns all photos without restriction.
+        This function intelligently selects a subset of photos for display,
+        filtering out images that are too similar based on CLIP embeddings.
         
         Args:
             photo_ids: List of all photo IDs
@@ -354,8 +355,109 @@ class InnerNarrativeGenerator:
         Returns:
             List of selected photo IDs
         """
-        # For now, just return all photos without any limit
-        return photo_ids
+        # If no photo IDs provided, return empty list
+        if not photo_ids:
+            return []
+        
+        # If max_photos not specified or greater than number of photos, use all photos
+        if max_photos is None or max_photos >= len(photo_ids):
+            max_photos = len(photo_ids)
+        
+        # Load all photo metadata to access CLIP embeddings
+        photos_metadata = {}
+        for photo_id in photo_ids:
+            photo_path = os.path.join(self.photos_metadata_dir, f"{photo_id}.json")
+            if os.path.exists(photo_path):
+                try:
+                    with open(photo_path, "r") as f:
+                        photo_data = json.load(f)
+                    photos_metadata[photo_id] = photo_data
+                except Exception as e:
+                    logger.warning(f"Error loading metadata for photo {photo_id}: {str(e)}")
+        
+        # If we couldn't load metadata or no photos have CLIP embeddings, return original list
+        if not photos_metadata:
+            return photo_ids[:max_photos]
+        
+        # Check if we have CLIP embeddings
+        has_clip_embeddings = any(
+            photo.get("clip_data") and photo["clip_data"].get("embedding") 
+            for photo in photos_metadata.values()
+        )
+        
+        # If no CLIP embeddings found, return original list (with max limit)
+        if not has_clip_embeddings:
+            return photo_ids[:max_photos]
+        
+        # Create a list of pairs (photo_id, embedding) for photos with valid embeddings
+        candidates = []
+        for photo_id, photo in photos_metadata.items():
+            if photo.get("clip_data") and photo["clip_data"].get("embedding"):
+                candidates.append((photo_id, photo["clip_data"]["embedding"]))
+        
+        # Calculate similarity threshold (can be adjusted)
+        similarity_threshold = 0.80  # Photos with similarity above this are considered too similar
+        
+        # Select photos while avoiding too similar ones
+        selected_ids = []
+        
+        # Helper function to compute cosine similarity
+        def compute_similarity(embedding1, embedding2):
+            if not embedding1 or not embedding2:
+                return 0.0
+            
+            # Convert to numpy arrays
+            a = np.array(embedding1)
+            b = np.array(embedding2)
+            
+            # Calculate cosine similarity
+            similarity = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+            return float(similarity)
+        
+        # Start with the first photo
+        if candidates:
+            # Sort by timestamp if available to prioritize chronological order
+            try:
+                candidates.sort(
+                    key=lambda x: photos_metadata[x[0]].get("timestamp", 0) 
+                    if isinstance(photos_metadata[x[0]].get("timestamp"), (int, float)) 
+                    else 0
+                )
+            except Exception as e:
+                logger.warning(f"Error sorting by timestamp: {str(e)}")
+            
+            # Add first photo
+            selected_ids.append(candidates[0][0])
+            
+            # Filter remaining photos
+            for candidate_id, candidate_embedding in candidates[1:]:
+                # Skip if we've reached max photos
+                if len(selected_ids) >= max_photos:
+                    break
+                
+                # Check if this photo is too similar to any already selected photo
+                too_similar = False
+                for selected_id in selected_ids:
+                    selected_embedding = photos_metadata[selected_id].get("clip_data", {}).get("embedding")
+                    if not selected_embedding:
+                        continue
+                    
+                    similarity = compute_similarity(candidate_embedding, selected_embedding)
+                    if similarity > similarity_threshold:
+                        too_similar = True
+                        print(f"Skipping photo {candidate_id} because it's too similar to {selected_id} (similarity: {similarity})")
+                        break
+                
+                # Add to selection if not too similar
+                if not too_similar:
+                    selected_ids.append(candidate_id)
+        
+        # If we didn't find enough photos with the filtering, add more from original list
+        remaining_ids = [pid for pid in photo_ids if pid not in selected_ids]
+        while len(selected_ids) < max_photos and remaining_ids:
+            selected_ids.append(remaining_ids.pop(0))
+        
+        return selected_ids
         
         # Future implementation could intelligently select photos based on:
         # - Image quality

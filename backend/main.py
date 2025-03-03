@@ -14,7 +14,6 @@ import random
 from processors import PhotoProcessor
 from narrative_generator import InnerNarrativeGenerator
 from processors.photo_processor import PhotoProcessor
-from processors.narrative_generator import NarrativeGenerator
 from processors.update_clip_embeddings import update_photos_with_clip_embeddings
 
 # Constants for directory paths

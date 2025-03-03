@@ -10,7 +10,7 @@ const NarrativeDetail = () => {
   const [loading, setLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState({ loaded: 0, total: 0 });
   const [error, setError] = useState(null);
-  const [viewMode, setViewMode] = useState('slideshow'); // 'slideshow' or 'grid'
+  const [viewMode, setViewMode] = useState('grid'); // 'slideshow' or 'grid'
 
   useEffect(() => {
     const fetchNarrativeAndPhotos = async () => {
