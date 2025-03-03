@@ -59,16 +59,6 @@ const NarrativeList = () => {
     }
   };
 
-  const startFaceDetection = async () => {
-    try {
-      await axios.post('/api/update-face-data');
-      checkProcessingStatus();
-    } catch (err) {
-      console.error('Error starting face detection:', err);
-      setError('Failed to start face detection process. Please try again later.');
-    }
-  };
-
   const getStatusMessage = () => {
     if (!processingStatus || !processingStatus.is_processing) {
       return null;
@@ -129,20 +119,9 @@ const NarrativeList = () => {
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-800">Your Life Narratives</h1>
         
-        <button
-          onClick={startFaceDetection}
-          disabled={processingStatus && processingStatus.is_processing}
-          className={`flex items-center px-4 py-2 rounded-md ${
-            processingStatus && processingStatus.is_processing
-              ? 'bg-gray-300 cursor-not-allowed'
-              : 'bg-purple-600 hover:bg-purple-700 text-white'
-          }`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-          </svg>
-          Detect Faces
-        </button>
+        <Link to="/process" className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-300">
+          Process More Photos
+        </Link>
       </div>
       
       {processingStatus && processingStatus.is_processing && (

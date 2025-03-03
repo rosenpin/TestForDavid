@@ -11,6 +11,8 @@ const ProcessPhotos = () => {
   const [success, setSuccess] = useState(false);
   const fileInputRef = useRef(null);
   const statusIntervalRef = useRef(null);
+  const [faceProcessingStatus, setFaceProcessingStatus] = useState(null);
+  const faceStatusIntervalRef = useRef(null);
 
   // Fetch processing status
   useEffect(() => {
@@ -56,6 +58,40 @@ const ProcessPhotos = () => {
       }
     };
   }, [loading]);
+
+  // Check face processing status
+  useEffect(() => {
+    const checkFaceProcessingStatus = async () => {
+      try {
+        const response = await axios.get('/api/status');
+        setFaceProcessingStatus(response.data);
+        
+        if (response.data && response.data.is_processing === false) {
+          if (faceStatusIntervalRef.current) {
+            clearInterval(faceStatusIntervalRef.current);
+            faceStatusIntervalRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.error('Error checking face processing status:', err);
+      }
+    };
+
+    // Initial check
+    checkFaceProcessingStatus();
+
+    // Set up interval for checking face processing status
+    if (faceProcessingStatus && faceProcessingStatus.is_processing && !faceStatusIntervalRef.current) {
+      faceStatusIntervalRef.current = setInterval(checkFaceProcessingStatus, 3000);
+    }
+
+    // Clean up interval on unmount
+    return () => {
+      if (faceStatusIntervalRef.current) {
+        clearInterval(faceStatusIntervalRef.current);
+      }
+    };
+  }, [faceProcessingStatus]);
 
   const handleDirectorySubmit = async (e) => {
     e.preventDefault();
@@ -136,8 +172,41 @@ const ProcessPhotos = () => {
     }
   };
 
+  // Face detection functions
+  const startFaceDetection = async () => {
+    try {
+      await axios.post('/api/update-face-data');
+      const response = await axios.get('/api/status');
+      setFaceProcessingStatus(response.data);
+    } catch (err) {
+      console.error('Error starting face detection:', err);
+      setError('Failed to start face detection process. Please try again later.');
+    }
+  };
+
+  const getFaceStatusMessage = () => {
+    if (!faceProcessingStatus || !faceProcessingStatus.is_processing) {
+      return null;
+    }
+
+    const stage = faceProcessingStatus.current_stage;
+    
+    if (stage === 'preparing_face_data_update') {
+      return 'Preparing for face detection...';
+    } else if (stage === 'detecting_faces') {
+      const processed = faceProcessingStatus.processed_photos || 0;
+      const total = faceProcessingStatus.total_photos || 0;
+      const faces = faceProcessingStatus.faces_detected || 0;
+      return `Detecting faces: ${processed}/${total} photos processed (${faces} faces found)`;
+    } else if (stage === 'clustering_faces') {
+      return 'Grouping similar faces together...';
+    } else {
+      return `Processing: ${stage}`;
+    }
+  };
+
   return (
-    <div className="py-8">
+    <div className="py-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold text-gray-800 mb-8 text-center">Process Your Photos</h1>
       
       {success && (
@@ -145,7 +214,7 @@ const ProcessPhotos = () => {
           <strong className="font-bold">Success!</strong>
           <span className="block sm:inline"> Your photos have been processed and narratives have been generated.</span>
           <div className="mt-3">
-            <Link to="/narratives" className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-6 rounded-md transition duration-300">
+            <Link to="/narratives" className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition duration-300">
               View Narratives
             </Link>
           </div>
@@ -178,12 +247,40 @@ const ProcessPhotos = () => {
           )}
         </div>
       )}
+
+      {/* Face processing status */}
+      {faceProcessingStatus && faceProcessingStatus.is_processing && (
+        <div className="mb-8 bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded relative">
+          <div className="flex items-center">
+            <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-blue-500 mr-3"></div>
+            <span>{getFaceStatusMessage()}</span>
+          </div>
+          {faceProcessingStatus.processed_photos !== undefined && faceProcessingStatus.total_photos > 0 && (
+            <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+              <div 
+                className="bg-blue-500 h-2.5 rounded-full" 
+                style={{ width: `${(faceProcessingStatus.processed_photos / faceProcessingStatus.total_photos) * 100}%` }}
+              ></div>
+            </div>
+          )}
+        </div>
+      )}
       
-      <div className="max-w-lg mx-auto">
-       
+      {faceProcessingStatus && !faceProcessingStatus.is_processing && faceProcessingStatus.face_stats && (
+        <div className="mb-8 bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded relative">
+          <p className="font-medium">Face detection complete!</p>
+          <p className="text-sm mt-1">
+            Processed {faceProcessingStatus.face_stats.processed} photos, 
+            detected {faceProcessingStatus.face_stats.faces_detected} faces, 
+            identified {faceProcessingStatus.face_stats.unique_persons || 0} unique persons.
+          </p>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         {/* File Upload */}
         <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Upload Photos</h2>
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">1. Upload Photos</h2>
           <p className="text-gray-600 mb-6">
             Select photos from your device to upload and process.
           </p>
@@ -225,47 +322,70 @@ const ProcessPhotos = () => {
             </button>
           </form>
         </div>
-      </div>
-      
-      {/* Add Regenerate Narratives Section */}
-      <div className="max-w-lg mx-auto mt-8">
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Regenerate Narratives Only</h2>
+
+        {/* Face Detection */}
+        <div className="bg-white rounded-lg shadow-md p-6 flex flex-col">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">2. Detect Faces</h2>
           <p className="text-gray-600 mb-6">
-            If you've already processed your photos but want to regenerate the narratives without reprocessing everything, click the button below.
-            This is useful if narrative generation previously failed or if you made changes to the code that affects narrative generation.
+            After processing your photos, run face detection to identify people in your photos.
+            This will help organize your photos by the people in them.
           </p>
           
           <button
-            onClick={async () => {
-              try {
-                setLoading(true);
-                setError(null);
-                setSuccess(false);
-                
-                await axios.post('/api/narratives');
-                
-                // Status updates will be handled by the useEffect
-              } catch (err) {
-                console.error('Error regenerating narratives:', err);
-                setError(err.response?.data?.detail || 'Failed to regenerate narratives');
-                setLoading(false);
-              }
-            }}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-300 disabled:bg-gray-400"
-            disabled={loading}
+            onClick={startFaceDetection}
+            disabled={faceProcessingStatus && faceProcessingStatus.is_processing}
+            className={`w-full flex items-center justify-center px-4 py-2 rounded-md mt-auto ${
+              faceProcessingStatus && faceProcessingStatus.is_processing
+                ? 'bg-gray-300 cursor-not-allowed'
+                : 'bg-purple-600 hover:bg-purple-700 text-white'
+            }`}
           >
-            Regenerate Narratives
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+            </svg>
+            Detect Faces
           </button>
         </div>
       </div>
       
-      <div className="mt-8 bg-gray-100 rounded-lg p-6">
+      {/* Regenerate Narratives */}
+      <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+        <h2 className="text-xl font-semibold text-gray-800 mb-4">3. Regenerate Narratives</h2>
+        <p className="text-gray-600 mb-6">
+          If you've already processed your photos but want to regenerate the narratives without reprocessing everything, use this option.
+          This is useful if narrative generation previously failed or if you made changes to the code that affects narrative generation.
+        </p>
+        
+        <button
+          onClick={async () => {
+            try {
+              setLoading(true);
+              setError(null);
+              setSuccess(false);
+              
+              await axios.post('/api/narratives');
+              
+              // Status updates will be handled by the useEffect
+            } catch (err) {
+              console.error('Error regenerating narratives:', err);
+              setError(err.response?.data?.detail || 'Failed to regenerate narratives');
+              setLoading(false);
+            }
+          }}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-300 disabled:bg-gray-400"
+          disabled={loading}
+        >
+          Regenerate Narratives
+        </button>
+      </div>
+      
+      <div className="bg-gray-100 rounded-lg p-6">
         <h2 className="text-xl font-semibold text-gray-800 mb-4">What Happens Next?</h2>
         <ol className="list-decimal list-inside space-y-2 text-gray-700">
           <li>Your photos will be analyzed using AI to generate detailed descriptions.</li>
           <li>The descriptions will be analyzed to identify meaningful life narratives.</li>
           <li>The most representative photos will be selected for each narrative.</li>
+          <li>If you run face detection, people in your photos will be identified and grouped.</li>
           <li>Once processing is complete, you'll be able to explore your narratives.</li>
         </ol>
       </div>
