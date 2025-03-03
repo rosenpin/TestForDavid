@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import NarrativeList from './pages/NarrativeList';
 import NarrativeDetail from './pages/NarrativeDetail';
 import ProcessPhotos from './pages/ProcessPhotos';
+import PersonDetail from './pages/PersonDetail';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="/narratives" element={<NarrativeList />} />
           <Route path="/narratives/:id" element={<NarrativeDetail />} />
           <Route path="/process" element={<ProcessPhotos />} />
+          <Route path="/persons/:id" element={<PersonDetail />} />
         </Routes>
       </main>
       <footer className="bg-white py-6 text-center text-gray-500 text-sm">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 const NarrativeDetail = () => {
@@ -13,6 +13,7 @@ const NarrativeDetail = () => {
   const [viewMode, setViewMode] = useState('grid'); // 'slideshow' or 'grid'
   const [personData, setPersonData] = useState({});
   const [loadingPersons, setLoadingPersons] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchNarrativeAndPhotos = async () => {
@@ -150,7 +151,8 @@ const NarrativeDetail = () => {
               <div 
                 key={face.id} 
                 className={`flex items-center ${isSlideshow ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-100 hover:bg-gray-200'} rounded-full px-2 py-1 transition-colors duration-200 cursor-pointer group relative`}
-                title={`${face.person_id.replace('person_', 'Person ')} - Appears in ${photoCount} photo${photoCount !== 1 ? 's' : ''}`}
+                title={`Click to see all photos with ${face.person_id.replace('person_', 'Person ')}`}
+                onClick={() => navigate(`/persons/${face.person_id}`)}
               >
                 <img 
                   src={`/api/face-files/${face.id}.jpg`}
@@ -161,12 +163,15 @@ const NarrativeDetail = () => {
                     e.target.src = 'https://www.svgrepo.com/show/508699/landscape-placeholder.svg';
                   }}
                 />
-                <span className={`text-xs ${isSlideshow ? 'text-gray-300' : 'text-gray-700'}`}>{face.person_id.replace('person_', 'Person ')}</span>
+                <span className={`text-xs ${isSlideshow ? 'text-gray-300' : 'text-gray-700'} mr-1`}>{face.person_id.replace('person_', 'Person ')}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" className={`h-3 w-3 ${isSlideshow ? 'text-gray-400' : 'text-gray-500'}`} viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
                 
                 {/* Tooltip that appears on hover */}
                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block z-10">
                   <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap">
-                    Appears in {photoCount} photo{photoCount !== 1 ? 's' : ''}
+                    Click to see all {photoCount} photo{photoCount !== 1 ? 's' : ''} with this person
                     <div className="absolute left-1/2 transform -translate-x-1/2 top-full">
                       <div className="border-4 border-transparent border-t-gray-900 w-0 h-0"></div>
                     </div>
