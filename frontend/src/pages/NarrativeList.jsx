@@ -117,7 +117,7 @@ const NarrativeList = () => {
               </p>
               <div className="mt-4 flex justify-between items-center">
                 <span className="text-sm text-gray-500">
-                  {narrative.photo_ids ? narrative.photo_ids.length : 0} photos
+                  {narrative.selected_photo_ids ? narrative.selected_photo_ids.length : 0} photos
                 </span>
                 <span className="text-blue-600 font-medium">View narrative →</span>
               </div>

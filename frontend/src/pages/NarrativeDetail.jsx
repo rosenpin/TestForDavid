@@ -155,7 +155,7 @@ const NarrativeDetail = () => {
         
         <div className="flex justify-between items-center mb-6">
           <div className="text-sm text-gray-500">
-            {photos.length} photos in this narrative
+            {photos.length} photos in this narrative {narrative.photo_ids && narrative.photo_ids.length !== photos.length && `(${narrative.photo_ids.length} before filtering)`}
           </div>
           <div className="flex space-x-2">
             <button 
