@@ -153,7 +153,7 @@ const NarrativeDetail = () => {
                 title={`${face.person_id.replace('person_', 'Person ')} - Appears in ${photoCount} photo${photoCount !== 1 ? 's' : ''}`}
               >
                 <img 
-                  src={`/api/photo-files/faces/${face.id}.jpg`}
+                  src={`/api/face-files/${face.id}.jpg`}
                   alt={`Face ${face.id}`}
                   className={`${isSlideshow ? 'w-10 h-10' : 'w-8 h-8'} rounded-full object-cover mr-1 border ${isSlideshow ? 'border-gray-600' : 'border-white'}`}
                   onError={(e) => {
