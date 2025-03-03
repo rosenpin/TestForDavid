@@ -56,10 +56,10 @@ const PersonDetail = () => {
     );
   }
 
-  // Get a sample face for this person
-  const sampleFace = person.faces && person.faces.length > 0 ? person.faces[0] : null;
+  // Get a sample photo for this person
   const photoCount = person.photos?.length || 0;
   const photoMetadata = person.photo_metadata || [];
+  const firstPhoto = photoMetadata.length > 0 ? photoMetadata[0] : null;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -71,9 +71,9 @@ const PersonDetail = () => {
 
       <div className="bg-white rounded-lg shadow-md p-6 mb-8">
         <div className="flex items-center mb-6">
-          {sampleFace ? (
+          {firstPhoto ? (
             <img 
-              src={`/api/face-files/${sampleFace}.jpg`}
+              src={`/api/photo-files/${firstPhoto.filename}`}
               alt={`Person ${id.replace('person_', '')}`}
               className="w-20 h-20 rounded-full object-cover border-4 border-blue-100 mr-4"
               onError={(e) => {
@@ -151,7 +151,7 @@ const PersonDetail = () => {
                 </p>
                 <div className="mt-3 flex justify-between items-center">
                   <span className="text-xs text-gray-500">
-                    {photo.date_taken ? new Date(photo.date_taken).toLocaleDateString() : 'Unknown date'}
+                    {photo.timestamp ? new Date(photo.timestamp * 1000).toLocaleDateString() : 'Unknown date'}
                   </span>
                   {photo.narrative_id && (
                     <Link 
