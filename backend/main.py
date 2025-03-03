@@ -128,7 +128,19 @@ async def get_narratives():
         
         with open(NARRATIVES_FILE, "r") as f:
             narratives = json.load(f)
-        return {"narratives": narratives}
+        
+        # Filter out broken narratives (those with no description or "No narrative available")
+        filtered_narratives = [
+            narrative for narrative in narratives 
+            if narrative.get("description") and 
+            "No narrative" not in narrative.get("description", "") and
+            narrative.get("selected_photo_ids")
+        ]
+        
+        # Sort narratives by number of photos (descending)
+        filtered_narratives.sort(key=lambda x: len(x.get("selected_photo_ids", [])), reverse=True)
+        
+        return {"narratives": filtered_narratives}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving narratives: {str(e)}")
 

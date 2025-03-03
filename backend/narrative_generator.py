@@ -183,6 +183,10 @@ class InnerNarrativeGenerator:
                 narrative_text = narrative_obj.get("narrative", "A collection of photos.")
                 photo_ids = narrative_obj.get("photo_ids", [])
                 
+                # Skip narratives with no meaningful content
+                if "No narrative" in narrative_text or not photo_ids:
+                    continue
+                
                 # If we have explicit photo IDs in the narrative, use those
                 if photo_ids:
                     output_narratives.append({
@@ -248,13 +252,15 @@ class InnerNarrativeGenerator:
             # If no narratives were created, create a default one with all photos
             if not output_narratives:
                 photo_ids = [photo["id"] for photo in photos_for_generator]
-                output_narratives.append({
-                    "id": "1",
-                    "title": "Photo Collection",
-                    "description": "A collection of photos.",
-                    "photo_ids": photo_ids,
-                    "selected_photo_ids": self.select_photos_for_display(photo_ids)
-                })
+                # Only create the default narrative if we have enough photos
+                if photo_ids:
+                    output_narratives.append({
+                        "id": "1",
+                        "title": "Photo Collection",
+                        "description": "A collection of photos.",
+                        "photo_ids": photo_ids,
+                        "selected_photo_ids": self.select_photos_for_display(photo_ids)
+                    })
             
             # Save the narratives to file
             narratives_path = os.path.join(self.metadata_dir, "narratives.json")

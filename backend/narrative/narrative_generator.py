@@ -63,69 +63,55 @@ class NarrativeGenerator:
         """Generate multiple themed narratives for a collection of photos.
         
         Args:
-            photos: List of photo objects with metadata
-            collection_metadata: Additional metadata for the collection
+            photos: List of photo metadata dictionaries
+            collection_metadata: Optional metadata about the collection
             
         Returns:
-            List of dictionaries, each containing a themed narrative
+            List of narratives
         """
         start_time = time.time()
         logger.info(f"Starting narrative generation for {len(photos)} photos")
         
         try:
+            # Skip generation if no photos provided
+            if not photos:
+                logger.warning("No photos provided for narrative generation")
+                return []
+                
             # Process photos in batches
-            batch_summaries = await self.batch_processor.process_photos(
-                photos,
-                model=self.model,
-                max_concurrent_batches=self.max_concurrent_batches
-            )
+            batch_summaries = await self._process_photo_batches(photos)
             
-            # Save debug info if enabled
-            if self.debug_mode:
-                await save_debug_info("batch_summaries", batch_summaries, "debug_output")
-            
-            # If there are no batches, return early
             if not batch_summaries:
-                logger.warning("No batch summaries generated, returning empty result")
-                return [self._create_empty_result()]
+                logger.warning("No valid batch summaries generated")
+                return []
+                
+            # Group summaries by theme
+            theme_groups = await self._group_summaries_by_theme(batch_summaries)
             
-            # Group summaries by theme instead of consolidating everything
-            themed_summary_groups = await self._group_summaries_by_theme(batch_summaries)
+            if not theme_groups:
+                logger.warning("No theme groups identified")
+                return []
+                
+            # Merge similar themes
+            theme_groups = await self._merge_similar_theme_groups(theme_groups)
             
-            # Generate a separate narrative for each theme group
+            # Generate a narrative for each theme group
             narratives = []
-            for theme, theme_summaries in themed_summary_groups.items():
-                try:
-                    # If there are multiple summaries in this theme, do a mini-consolidation
-                    if len(theme_summaries) > 1:
-                        narrative = await self.summarizer.consolidate_summaries(
-                            theme_summaries,
-                            model=self.model
-                        )
-                    else:
-                        # If there's only one summary, convert it directly to a narrative
-                        narrative = self._convert_summary_to_narrative(theme_summaries[0])
+            for theme, summaries in theme_groups.items():
+                # Only create narratives with sufficient content
+                if len(summaries) > 0:
+                    narrative = self._convert_summary_to_narrative(summaries[0])
+                    narrative = self._enrich_narrative(narrative, summaries, collection_metadata, theme)
                     
-                    # Enrich the narrative with additional information
-                    enriched_narrative = self._enrich_narrative(
-                        narrative, 
-                        theme_summaries, 
-                        collection_metadata,
-                        theme
-                    )
-                    
-                    # Save debug info if enabled
-                    if self.debug_mode:
-                        await save_debug_info(f"narrative_{theme}", enriched_narrative, "debug_output")
-                    
-                    narratives.append(enriched_narrative)
-                except Exception as e:
-                    logger.error(f"Error generating narrative for theme '{theme}': {str(e)}")
-                    narratives.append(self._create_error_result(f"Error generating narrative for theme '{theme}': {str(e)}"))
+                    # Skip narratives with errors or empty content
+                    if (narrative.get("narrative") and 
+                        "No narrative" not in narrative.get("narrative", "") and
+                        narrative.get("photo_ids")):
+                        narratives.append(narrative)
             
-            # Calculate duration
-            duration = time.time() - start_time
-            logger.info(f"Generated {len(narratives)} themed narratives in {duration:.2f} seconds")
+            # Calculate process duration
+            duration = round(time.time() - start_time, 2)
+            logger.info(f"Generated {len(narratives)} narratives in {duration} seconds")
             
             # Add metadata to each narrative
             for narrative in narratives:
@@ -145,8 +131,8 @@ class NarrativeGenerator:
             
         except Exception as e:
             logger.error(f"Error in narrative generation: {str(e)}")
-            # Return a basic structure in case of error
-            return [self._create_error_result(str(e))]
+            # Return an empty list instead of an error result
+            return []
     
     async def _group_summaries_by_theme(
         self, 

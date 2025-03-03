@@ -63,18 +63,22 @@ const NarrativeList = () => {
       <h1 className="text-3xl font-bold text-gray-800 mb-8 text-center">Your Life Narratives</h1>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {narratives.map((narrative) => (
+        {narratives.map((narrative) => {
+          const photoCount = narrative.selected_photo_ids ? narrative.selected_photo_ids.length : 0;
+          const isSmallCollection = photoCount < 30;
+          
+          return (
           <Link 
             key={narrative.id} 
             to={`/narratives/${narrative.id}`}
-            className="narrative-card bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-all duration-300"
+            className={`narrative-card bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-all duration-300 ${isSmallCollection ? 'opacity-60' : ''}`}
           >
             {narrative.selected_photo_ids && narrative.selected_photo_ids.length > 0 && (
               <div className="h-48 overflow-hidden">
                 <img 
                   src={`/api/photo-files/${narrative.selected_photo_ids[0]}`} 
                   alt={narrative.title}
-                  className="w-full h-full object-cover"
+                  className={`w-full h-full object-cover ${isSmallCollection ? 'filter grayscale' : ''}`}
                   loading="lazy"
                   onError={(e) => {
                     // If the image fails to load, try with different extensions
@@ -111,19 +115,20 @@ const NarrativeList = () => {
               </div>
             )}
             <div className="p-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-2">{narrative.title}</h2>
+              <h2 className={`text-xl font-semibold mb-2 ${isSmallCollection ? 'text-gray-600' : 'text-gray-800'}`}>{narrative.title}</h2>
               <p className="text-gray-600 line-clamp-3">
                 {narrative.description}
               </p>
               <div className="mt-4 flex justify-between items-center">
-                <span className="text-sm text-gray-500">
-                  {narrative.selected_photo_ids ? narrative.selected_photo_ids.length : 0} photos
+                <span className={`text-sm ${isSmallCollection ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {photoCount} photos 
                 </span>
-                <span className="text-blue-600 font-medium">View narrative →</span>
+                <span className={`font-medium ${isSmallCollection ? 'text-blue-400' : 'text-blue-600'}`}>View narrative →</span>
               </div>
             </div>
           </Link>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
