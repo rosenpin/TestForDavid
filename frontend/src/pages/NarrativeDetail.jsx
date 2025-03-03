@@ -11,6 +11,8 @@ const NarrativeDetail = () => {
   const [loadingProgress, setLoadingProgress] = useState({ loaded: 0, total: 0 });
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('grid'); // 'slideshow' or 'grid'
+  const [personData, setPersonData] = useState({});
+  const [loadingPersons, setLoadingPersons] = useState(false);
 
   useEffect(() => {
     const fetchNarrativeAndPhotos = async () => {
@@ -59,6 +61,9 @@ const NarrativeDetail = () => {
         
         setPhotos(photoData);
         setLoading(false);
+
+        // After loading photos, fetch person data
+        fetchPersonData();
       } catch (err) {
         console.error('Error fetching narrative details:', err);
         setError('Failed to load narrative details. Please try again later.');
@@ -66,8 +71,114 @@ const NarrativeDetail = () => {
       }
     };
 
+    // Function to fetch person data
+    const fetchPersonData = async () => {
+      try {
+        setLoadingPersons(true);
+        
+        // Get all persons data
+        const personsResponse = await axios.get('/api/persons');
+        
+        if (personsResponse.data) {
+          // Create a lookup object for easy access
+          const personsLookup = {};
+          
+          // Process each person
+          Object.entries(personsResponse.data).forEach(([personId, personInfo]) => {
+            personsLookup[personId] = {
+              ...personInfo,
+              // Get a sample face image if available
+              sampleFace: personInfo.photos?.[0] ? `${personId}_sample` : null
+            };
+          });
+          
+          setPersonData(personsLookup);
+        }
+        
+        setLoadingPersons(false);
+      } catch (err) {
+        console.error('Error fetching person data:', err);
+        setLoadingPersons(false);
+      }
+    };
+
     fetchNarrativeAndPhotos();
   }, [id]);
+
+  // Helper function to render faces for a photo
+  const renderFaces = (photo, isSlideshow = false) => {
+    if (!photo.faces || photo.faces.length === 0) {
+      return null;
+    }
+
+    // Show loading indicator when person data is being fetched
+    if (loadingPersons) {
+      return (
+        <div className={`${isSlideshow ? 'mt-4 pt-3 border-t border-gray-700' : 'mt-3 border-t pt-2'}`}>
+          <div className="flex items-center space-x-2">
+            <div className={`${isSlideshow ? 'text-gray-300' : 'text-gray-600'} text-sm`}>Loading people data...</div>
+            <div className={`animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 ${isSlideshow ? 'border-gray-300' : 'border-gray-600'}`}></div>
+          </div>
+        </div>
+      );
+    }
+
+    // Check if we have any valid faces with person IDs
+    const validFaces = photo.faces.filter(face => face.person_id && personData[face.person_id]);
+    if (validFaces.length === 0) {
+      return (
+        <div className={`${isSlideshow ? 'mt-4 pt-3 border-t border-gray-700' : 'mt-3 border-t pt-2'}`}>
+          <div className={`${isSlideshow ? 'text-gray-300' : 'text-gray-600'} text-sm italic`}>No recognized people in this photo</div>
+        </div>
+      );
+    }
+
+    return (
+      <div className={`${isSlideshow ? 'mt-4 pt-3 border-t border-gray-700' : 'mt-3 border-t pt-2'}`}>
+        <h3 className={`${isSlideshow ? 'text-sm font-medium text-gray-300 mb-3' : 'text-sm font-medium mb-2'}`}>People in this photo:</h3>
+        <div className="flex flex-wrap gap-2">
+          {photo.faces.map((face) => {
+            if (!face.person_id) return null;
+            
+            const person = personData[face.person_id];
+            if (!person) return null;
+
+            // Calculate photo count for this person
+            const photoCount = person.photos?.length || 0;
+            
+            return (
+              <div 
+                key={face.id} 
+                className={`flex items-center ${isSlideshow ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-100 hover:bg-gray-200'} rounded-full px-2 py-1 transition-colors duration-200 cursor-pointer group relative`}
+                title={`${face.person_id.replace('person_', 'Person ')} - Appears in ${photoCount} photo${photoCount !== 1 ? 's' : ''}`}
+              >
+                <img 
+                  src={`/api/photo-files/faces/${face.id}.jpg`}
+                  alt={`Face ${face.id}`}
+                  className={`${isSlideshow ? 'w-10 h-10' : 'w-8 h-8'} rounded-full object-cover mr-1 border ${isSlideshow ? 'border-gray-600' : 'border-white'}`}
+                  onError={(e) => {
+                    e.target.onerror = null;
+                    e.target.src = 'https://www.svgrepo.com/show/508699/landscape-placeholder.svg';
+                  }}
+                />
+                <span className={`text-xs ${isSlideshow ? 'text-gray-300' : 'text-gray-700'}`}>{face.person_id.replace('person_', 'Person ')}</span>
+                
+                {/* Tooltip that appears on hover */}
+                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+                  <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap">
+                    Appears in {photoCount} photo{photoCount !== 1 ? 's' : ''}
+                    <div className="absolute left-1/2 transform -translate-x-1/2 top-full">
+                      <div className="border-4 border-transparent border-t-gray-900 w-0 h-0"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const goToNextPhoto = () => {
     setCurrentPhotoIndex((prevIndex) => 
@@ -287,6 +398,9 @@ const NarrativeDetail = () => {
                   </span>
                 </div>
               )}
+              
+              {/* Add faces/person recognition section */}
+              {renderFaces(photos[currentPhotoIndex], true)}
             </div>
           </div>
         </div>
@@ -384,6 +498,9 @@ const NarrativeDetail = () => {
                     {new Date(photo.timestamp * 1000).toLocaleDateString()}
                   </p>
                 )}
+                
+                {/* Add faces/person recognition section */}
+                {renderFaces(photo, false)}
               </div>
             </div>
           ))}
