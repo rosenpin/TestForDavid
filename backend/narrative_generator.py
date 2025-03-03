@@ -171,6 +171,21 @@ class InnerNarrativeGenerator:
             # Format the narratives for the expected output format
             output_narratives = []
             
+            # Check if we received an error result (single item with error status)
+            if (len(narrative_result) == 1 and 
+                narrative_result[0].get('metadata', {}).get('status') == 'error'):
+                # Log the error
+                error_msg = narrative_result[0].get('metadata', {}).get('error', 'Unknown error')
+                logger.error(f"Error from modular generator: {error_msg}")
+                
+                # Raise exception to prevent further processing
+                raise Exception(f"Narrative generation failed: {error_msg}")
+            
+            # Handle empty result
+            if not narrative_result:
+                logger.warning("Narrative generator returned empty result")
+                raise Exception("Narrative generation returned no results")
+            
             # Handle new list-based return format from the modular generator
             # Each item in the list is a separate themed narrative
             for narrative_index, narrative_obj in enumerate(narrative_result):

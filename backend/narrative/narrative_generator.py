@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from openai import AsyncOpenAI
 from collections import defaultdict
+import traceback
 
 from .openai_client import OpenAIClient
 from .batch_processor import BatchProcessor
@@ -131,7 +132,50 @@ class NarrativeGenerator:
             
         except Exception as e:
             logger.error(f"Error in narrative generation: {str(e)}")
-            # Return an empty list instead of an error result
+            # Return an error result instead of an empty list
+            # This way, downstream processors know something went wrong
+            traceback.print_exc()
+            return [{
+                "title": "Error in Narrative Generation",
+                "narrative": f"An error occurred while generating narratives: {str(e)}",
+                "themes": ["error"],
+                "photo_ids": [],
+                "metadata": {
+                    "error": str(e),
+                    "model": self.model,
+                    "generated_at": datetime.now().isoformat(),
+                    "status": "error"
+                }
+            }]
+    
+    async def _process_photo_batches(self, photos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Process photos in batches and generate summaries.
+        
+        Args:
+            photos: List of photo metadata
+            
+        Returns:
+            List of batch summaries
+        """
+        logger.info(f"Processing {len(photos)} photos in batches")
+        
+        try:
+            # Process photos using the batch processor
+            batch_summaries = await self.batch_processor.process_photos(
+                photos,
+                model=self.model,
+                max_concurrent_batches=self.max_concurrent_batches
+            )
+            
+            # Log how many batch summaries were created
+            logger.info(f"Generated {len(batch_summaries)} batch summaries")
+            
+            # Return the batch summaries
+            return batch_summaries
+            
+        except Exception as e:
+            logger.error(f"Error in batch processing: {str(e)}")
+            traceback.print_exc()
             return []
     
     async def _group_summaries_by_theme(
